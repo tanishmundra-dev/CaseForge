@@ -46,13 +46,12 @@ router.get("/courses", async (req, res) => {
 });
 
 router.get("/courses/:courseId", async (req, res) => {
-  const { data: course } = await supabase
+  const { data: course, error: courseErr } = await supabase
     .from("courses")
     .select("*")
     .eq("id", req.params.courseId)
-    .eq("status", "published")
-    .single();
-  if (!course) return res.json({ error: "Not found" });
+    .maybeSingle();
+  if (courseErr || !course) return res.status(404).json({ error: "Course not found" });
 
   // Build nested object
   const { data: weeks } = await supabase
@@ -110,7 +109,7 @@ router.get("/courses/:courseId/classes/:classId", async (req, res) => {
     .from("courses")
     .select("*")
     .eq("id", courseId)
-    .single();
+    .maybeSingle();
   if (!course) return res.json({ error: "Course not found" });
 
   // Find the class and its week
@@ -118,7 +117,7 @@ router.get("/courses/:courseId/classes/:classId", async (req, res) => {
     .from("classes")
     .select("*")
     .eq("id", classId)
-    .single();
+    .maybeSingle();
   if (!cls) return res.json({ error: "Class not found" });
 
   const { data: week } = await supabase
@@ -126,7 +125,7 @@ router.get("/courses/:courseId/classes/:classId", async (req, res) => {
     .select("*")
     .eq("id", cls.week_id)
     .eq("course_id", courseId)
-    .single();
+    .maybeSingle();
   if (!week) return res.json({ error: "Class not found" });
 
   const { data: assignments } = await supabase
@@ -161,28 +160,28 @@ router.get(
       .from("courses")
       .select("*")
       .eq("id", courseId)
-      .single();
+      .maybeSingle();
     if (!course) return res.json({ error: "Course not found" });
 
     const { data: cls } = await supabase
       .from("classes")
       .select("*")
       .eq("id", classId)
-      .single();
+      .maybeSingle();
     if (!cls) return res.json({ error: "Class not found" });
 
     const { data: week } = await supabase
       .from("weeks")
       .select("*")
       .eq("id", cls.week_id)
-      .single();
+      .maybeSingle();
 
     const { data: assignment } = await supabase
       .from("assignments")
       .select("*")
       .eq("id", assignmentId)
       .eq("class_id", classId)
-      .single();
+      .maybeSingle();
     if (!assignment) return res.json({ error: "Assignment not found" });
 
     const { class_id, ...asnData } = assignment;
@@ -217,7 +216,7 @@ router.post("/submit", async (req, res) => {
     .select("*")
     .eq("id", assignment_id || "")
     .eq("class_id", class_id || "")
-    .single();
+    .maybeSingle();
 
   if (!assignment) return res.json({ error: "Assignment not found" });
 

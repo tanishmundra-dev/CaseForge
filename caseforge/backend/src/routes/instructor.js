@@ -337,6 +337,61 @@ router.get("/analytics/score-distribution", async (req, res) => {
   res.json(Object.entries(buckets).map(([range, count]) => ({ range, count })));
 });
 
+// ── Students ──
+
+router.get("/students", async (req, res) => {
+  const { data, error } = await supabase
+    .from("users")
+    .select("id, name, email, created_at")
+    .eq("role", "student")
+    .order("created_at", { ascending: false });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data || []);
+});
+
+// ── Student enrollment ──
+
+router.post("/students/:studentId/enroll", async (req, res) => {
+  const { studentId } = req.params;
+  const { course_id } = req.body;
+  if (!course_id) return res.status(400).json({ error: "course_id required" });
+
+  const { error } = await supabase.from("enrollments").insert({
+    student_id: studentId,
+    course_id,
+  });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ success: true });
+});
+
+router.get("/students/:studentId/enrollments", async (req, res) => {
+  const { data, error } = await supabase
+    .from("enrollments")
+    .select("course_id, enrolled_at")
+    .eq("student_id", req.params.studentId);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data || []);
+});
+
+// ── Attendance / Activity ──
+
+router.get("/analytics/attendance", async (req, res) => {
+  const { data: subs } = await supabase.from("submissions").select("trainee_name, submitted_at").order("submitted_at");
+  // Group by day
+  const byDay = {};
+  for (const s of subs || []) {
+    const day = new Date(s.submitted_at).toISOString().slice(0, 10);
+    byDay[day] = (byDay[day] || 0) + 1;
+  }
+  const last7 = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(); d.setDate(d.getDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    last7.push({ date: key, label: d.toLocaleDateString("en", { weekday: "short" }), submissions: byDay[key] || 0 });
+  }
+  res.json(last7);
+});
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

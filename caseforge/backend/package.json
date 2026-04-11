@@ -7,15 +7,18 @@
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
     "seed": "node src/seed.js",
+    "seed:auth": "node src/seedAuth.js",
     "migrate": "node src/migrate.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
     "@supabase/supabase-js": "^2.49.1",
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "groq-sdk": "^1.1.2",
+    "jsonwebtoken": "^9.0.3",
     "uuid": "^11.1.0"
   },
   "devDependencies": {
