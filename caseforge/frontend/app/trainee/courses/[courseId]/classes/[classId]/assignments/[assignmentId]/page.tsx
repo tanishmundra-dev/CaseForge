@@ -94,6 +94,7 @@ function SandboxContent() {
         setAssignment(data);
         setCode(data.starter_code || "# Write your solution here\n");
       })
+      .catch(() => {})
       .finally(() => setLoading(false));
   }, [courseId, classId, assignmentId]);
 

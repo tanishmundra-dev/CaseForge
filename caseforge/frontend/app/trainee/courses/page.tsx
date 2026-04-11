@@ -21,6 +21,7 @@ export default function CoursesPage() {
   useEffect(() => {
     fetchAPI("/trainee/courses")
       .then(setCourses)
+      .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
 

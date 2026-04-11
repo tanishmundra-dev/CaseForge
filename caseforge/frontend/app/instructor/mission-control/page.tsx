@@ -51,9 +51,15 @@ function MissionControlInner() {
     if (course) localStorage.setItem("caseforge_draft", JSON.stringify(course));
   }, [course]);
 
-  // Load existing course if ?edit=courseId
+  // Load existing course or start fresh
   useEffect(() => {
-    if (editId) {
+    const isNew = searchParams.get("new") === "true";
+
+    if (isNew) {
+      // Fresh session — clear any stored draft
+      localStorage.removeItem("caseforge_draft");
+      // State is already clean from initial values
+    } else if (editId) {
       setCourseLoading(true);
       fetchAPI(`/instructor/courses/${editId}`)
         .then((data: any) => {
@@ -69,7 +75,7 @@ function MissionControlInner() {
         .catch(() => {})
         .finally(() => setCourseLoading(false));
     } else {
-      // Check localStorage for unsaved draft
+      // No params — check localStorage for unsaved draft
       const draft = localStorage.getItem("caseforge_draft");
       if (draft) {
         try {
@@ -165,16 +171,19 @@ function MissionControlInner() {
      APPLY MODIFICATION — surgical patch
      ══════════════════════════════════════════════ */
   const applyModification = (mod: any) => {
-    if (!course || !mod.data) return;
+    console.log("MODIFY received:", JSON.stringify({ action: mod.action, level: mod.level, week: mod.week, class: mod.class, assignment_index: mod.assignment_index, hasData: !!mod.data }));
+    if (!course) { console.log("MODIFY SKIP: no course"); return; }
+    if (!mod.data) { console.log("MODIFY SKIP: no data in response"); return; }
     setSaved(null);
 
     let level = mod.level;
     if (level === "class" && mod.data.classes) level = "week";
     if (level === "week" && !mod.data.classes && mod.data.assignments) level = "class";
+    console.log("MODIFY level:", level, "| course weeks:", course.weeks.map((w) => w.number));
 
     setCourse((prev) => {
       if (!prev) return prev;
-      const u = { ...prev, weeks: prev.weeks.map((w) => ({ ...w, classes: w.classes.map((c) => ({ ...c })) })) };
+      const u = { ...prev, weeks: prev.weeks.map((w) => ({ ...w, classes: w.classes.map((c) => ({ ...c, assignments: [...c.assignments] })) })) };
 
       switch (level) {
         case "meta":
@@ -198,10 +207,26 @@ function MissionControlInner() {
             const cn = mod.class || mod.data.number;
             const ci = u.weeks[wi].classes.findIndex((c) => c.number === cn);
             if (ci >= 0) {
-              u.weeks[wi].classes[ci] = { ...mod.data, number: cn };
+              u.weeks[wi].classes[ci] = { ...u.weeks[wi].classes[ci], ...mod.data, number: cn };
               setModifiedKey(`c-${mod.week}-${cn}`);
               setExpandedWeeks((p) => new Set([...p, mod.week]));
               setExpandedClasses((p) => new Set([...p, `${mod.week}-${cn}`]));
+            }
+          }
+          break;
+        }
+        case "add_assignment": {
+          const wi = u.weeks.findIndex((w) => w.number === mod.week);
+          if (wi >= 0) {
+            const ci = u.weeks[wi].classes.findIndex((c) => c.number === mod.class);
+            if (ci >= 0) {
+              const newAsn = normalizeAssignment(mod.data);
+              u.weeks[wi].classes[ci].assignments.push(newAsn);
+              const ai = u.weeks[wi].classes[ci].assignments.length - 1;
+              setModifiedKey(`a-${mod.week}-${mod.class}-${ai}`);
+              setExpandedWeeks((p) => new Set([...p, mod.week]));
+              setExpandedClasses((p) => new Set([...p, `${mod.week}-${mod.class}`]));
+              console.log("MODIFY: added new assignment", newAsn.type, newAsn.title, "at index", ai);
             }
           }
           break;
@@ -211,9 +236,25 @@ function MissionControlInner() {
           if (wi >= 0) {
             const ci = u.weeks[wi].classes.findIndex((c) => c.number === mod.class);
             if (ci >= 0) {
-              const ai = mod.assignment_index ?? 0;
-              const asns = [...u.weeks[wi].classes[ci].assignments];
-              asns[ai] = mod.data;
+              const asns = u.weeks[wi].classes[ci].assignments;
+              let ai = mod.assignment_index ?? -1;
+              // Smart match: try index first, then match by type or title
+              if (ai < 0 || ai >= asns.length || (mod.data.type && asns[ai]?.type !== mod.data.type)) {
+                const typeMatch = asns.findIndex((a) => a.type === mod.data.type);
+                if (typeMatch >= 0) ai = typeMatch;
+                else {
+                  const titleMatch = asns.findIndex((a) => mod.data.title && a.title?.toLowerCase().includes(mod.data.title.toLowerCase().slice(0, 10)));
+                  if (titleMatch >= 0) ai = titleMatch;
+                  else ai = mod.assignment_index ?? 0;
+                }
+              }
+              // If index still out of range, append instead of silently failing
+              if (ai < 0 || ai >= asns.length) {
+                asns.push(normalizeAssignment(mod.data));
+                ai = asns.length - 1;
+              } else {
+                asns[ai] = { ...asns[ai], ...normalizeAssignment(mod.data) };
+              }
               u.weeks[wi].classes[ci] = { ...u.weeks[wi].classes[ci], assignments: asns };
               setModifiedKey(`a-${mod.week}-${mod.class}-${ai}`);
               setExpandedWeeks((p) => new Set([...p, mod.week]));
@@ -226,6 +267,21 @@ function MissionControlInner() {
       return u;
     });
   };
+
+  const normalizeAssignment = (data: any): Assignment => ({
+    title: data.title || "Untitled",
+    description: data.description || "",
+    type: data.type || "coding",
+    difficulty: data.difficulty || "Intermediate",
+    starter_code: data.starter_code || "",
+    test_cases: data.test_cases || [],
+    rubric: data.rubric || [],
+    hints: data.hints || [],
+    pitfalls: data.pitfalls || [],
+    aha_moment: data.aha_moment || "",
+    questions: data.questions || [],
+    files: data.files || [],
+  });
 
   /* ══════════════════════════════════════════════
      SSE STREAMING — initial generation

@@ -5,6 +5,13 @@ export async function fetchAPI(path: string, options?: RequestInit) {
     headers: { "Content-Type": "application/json" },
     ...options,
   });
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const body = await res.json();
+      detail = body.error || body.message || "";
+    } catch { /* no json body */ }
+    throw new Error(detail || `API error: ${res.status}`);
+  }
   return res.json();
 }

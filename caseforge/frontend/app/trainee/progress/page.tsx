@@ -34,6 +34,7 @@ export default function ProgressPage() {
   useEffect(() => {
     fetchAPI("/trainee/progress")
       .then(setProgress)
+      .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
 

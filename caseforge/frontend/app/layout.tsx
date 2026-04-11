@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import Navbar from "@/components/shared/Navbar";
+import { AppShell } from "./AppShell";
 
 export const metadata: Metadata = {
   title: "CaseForge",
@@ -15,8 +15,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <Navbar />
-        {children}
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );

@@ -38,6 +38,7 @@ export default function CourseDetailPage() {
           }
         }
       })
+      .catch(() => {})
       .finally(() => setLoading(false));
   }, [courseId]);
 

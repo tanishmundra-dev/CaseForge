@@ -1,39 +1,79 @@
-const Groq = require("groq-sdk");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 require("dotenv").config();
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
+// Models to try in order — fallback chain
 const MODELS = [
-  "llama-3.3-70b-versatile",
-  "llama-3.1-8b-instant",
-  "gemma2-9b-it",
+  "gemini-2.5-pro",
+  "gemini-2.5-flash",
+  "gemini-2.0-flash",
 ];
 
-async function callLLM(messages, maxTokens = 4000) {
+async function callLLM(systemPrompt, userMessages, maxTokens = 4000) {
   let lastError = null;
-  for (const model of MODELS) {
+
+  for (const modelName of MODELS) {
     try {
-      const response = await groq.chat.completions.create({
-        model,
-        messages,
-        temperature: 0.7,
-        max_tokens: maxTokens,
-        response_format: { type: "json_object" },
+      const model = genAI.getGenerativeModel({
+        model: modelName,
+        generationConfig: {
+          responseMimeType: "application/json",
+          maxOutputTokens: maxTokens,
+          temperature: 0.7,
+        },
       });
-      return response.choices[0]?.message?.content?.trim() || "{}";
+
+      // Build contents array for Gemini
+      // Gemini uses "user" and "model" roles, system instruction is separate
+      const contents = [];
+      for (const msg of userMessages) {
+        contents.push({
+          role: msg.role === "assistant" ? "model" : "user",
+          parts: [{ text: msg.content }],
+        });
+      }
+
+      const result = await model.generateContent({
+        contents,
+        systemInstruction: { role: "user", parts: [{ text: systemPrompt }] },
+      });
+
+      const text = result.response.text().trim();
+      console.log(`Model ${modelName} succeeded`);
+      return text;
     } catch (err) {
-      console.log(`Model ${model} failed: ${err.status || err.message}`);
+      const status = err.status || err.httpStatusCode || "";
+      const msg = err.message || "";
+      console.log(`Model ${modelName} failed: ${status} ${msg.slice(0, 100)}`);
       lastError = err;
-      if (err.status === 429 || err.status === 413) continue;
-      throw err;
+
+      // If model not found, try next
+      if (msg.includes("not found") || msg.includes("not supported") || status === 404) continue;
+      // Rate limited, try next
+      if (status === 429) continue;
+      // Request too large, try next
+      if (status === 413) continue;
+      // Other errors — still try next model
+      continue;
     }
   }
-  throw lastError || new Error("All models rate limited");
+
+  throw lastError || new Error("All models failed");
 }
 
 function safeJSON(text) {
   try { return JSON.parse(text); } catch {}
-  try { const s = text.indexOf("{"), e = text.lastIndexOf("}"); if (s !== -1 && e > s) return JSON.parse(text.slice(s, e + 1)); } catch {}
+  // Strip markdown fences
+  try {
+    const clean = text.replace(/```json?\s*/g, "").replace(/```\s*/g, "").trim();
+    return JSON.parse(clean);
+  } catch {}
+  // Extract first JSON object
+  try {
+    const s = text.indexOf("{"), e = text.lastIndexOf("}");
+    if (s !== -1 && e > s) return JSON.parse(text.slice(s, e + 1));
+  } catch {}
   return null;
 }
 
@@ -43,47 +83,110 @@ function safeJSON(text) {
 
 const CHAT_SYSTEM = `You are a JSON API for a curriculum design chatbot. Respond with ONLY a JSON object.
 
-If no course exists: gather topic, audience, timeline through friendly conversation.
-When ready: {"action":"generate","message":"confirmation","context":{"topic":"...","audience":"...","timeline":"...","technologies":[],"additional_notes":""}}
+═══ NO COURSE EXISTS ═══
+Gather topic, audience, timeline through friendly conversation.
+When ready: {"action":"generate","message":"confirmation text","context":{"topic":"...","audience":"...","timeline":"...","technologies":[],"additional_notes":""}}
 
-If a course exists (COURSE_CONTEXT): handle modifications.
-{"action":"modify","message":"what changed","level":"assignment|class|week|meta","week":1,"class":1,"assignment_index":0,"data":{complete updated object}}
+═══ COURSE EXISTS (COURSE_CONTEXT provided) ═══
+Handle modifications. You MUST return COMPLETE data objects — never empty or partial.
 
-For conversation: {"action":"chat","message":"your friendly response"}
+▸ Modify existing content:
+{"action":"modify","message":"what changed","level":"meta|week|class|assignment","week":1,"class":1,"assignment_index":0,"data":{COMPLETE object}}
 
-Rules: "message" is shown to the user - keep it natural. Never show JSON/code/system text in it.
-Every assignment needs: title, description, type, difficulty.
-Every class needs: number, title, description, assignments[], references[].`;
+▸ Add a new assignment to a class:
+{"action":"modify","message":"what changed","level":"add_assignment","week":1,"class":1,"data":{COMPLETE assignment object}}
+
+═══ ASSIGNMENT SCHEMAS — always use these COMPLETE structures ═══
+
+CODING assignment (type:"coding"):
+{"title":"...","description":"3+ sentences","type":"coding","difficulty":"Beginner|Intermediate|Advanced",
+ "starter_code":"# Real working starter code\\ndef solve():\\n    pass\\n\\nprint(solve())",
+ "test_cases":[{"input":"sample input","expected_output":"expected output","description":"what this tests"}],
+ "rubric":[{"criterion":"Correctness","excellent":"...","acceptable":"...","poor":"...","weight":50},{"criterion":"Code Quality","excellent":"...","acceptable":"...","poor":"...","weight":50}],
+ "hints":["concrete hint 1","concrete hint 2"],
+ "pitfalls":["common mistake 1"],
+ "aha_moment":"key insight students should discover",
+ "questions":[],"files":[]}
+
+QUIZ/OBJECTIVE assignment (type:"objective"):
+{"title":"...","description":"3+ sentences about what this quiz tests","type":"objective","difficulty":"...",
+ "questions":[
+   {"type":"mcq","question":"Specific technical question?","options":["correct answer","wrong 1","wrong 2","wrong 3"],"correct":0,"explanation":"Why this is correct"},
+   {"type":"mcq","question":"Another question?","options":["A","B","C","D"],"correct":2,"explanation":"Explanation"},
+   {"type":"fill_up","question":"The ___ keyword is used to...","answer":"correct answer","explanation":"Why"}
+ ],
+ "rubric":[],"hints":[],"pitfalls":[],"aha_moment":"","starter_code":"","test_cases":[],"files":[]}
+IMPORTANT: Quizzes MUST have 5+ questions with real technical content. Each MCQ needs 4 options.
+
+IDE/PROJECT assignment (type:"ide"):
+{"title":"...","description":"3+ sentences","type":"ide","difficulty":"...",
+ "files":[
+   {"name":"index.html","content":"<!DOCTYPE html>\\n<html>...</html>","language":"html"},
+   {"name":"style.css","content":"body { ... }","language":"css"},
+   {"name":"app.js","content":"// Real working code","language":"javascript"}
+ ],
+ "rubric":[{"criterion":"Functionality","excellent":"...","acceptable":"...","poor":"...","weight":50}],
+ "hints":["hint"],"pitfalls":["pitfall"],"aha_moment":"insight",
+ "starter_code":"","test_cases":[],"questions":[]}
+
+═══ CHOOSING ASSIGNMENT TYPES ═══
+For tech courses, each class should have a MIX of types:
+- "coding" for algorithmic/logic practice (starter code + test cases)
+- "objective" for conceptual understanding (MCQ + fill-up questions)
+- "ide" for multi-file projects (HTML/CSS/JS, full apps)
+When the user asks to "add a quiz" → type:"objective" with 5+ real questions.
+When the user asks to "add a coding exercise" → type:"coding" with real starter code.
+When the user asks to "add a project" → type:"ide" with real files.
+
+═══ CONVERSATION ═══
+{"action":"chat","message":"your friendly response"}
+
+Rules:
+- "message" is shown to the user — keep it natural, never show JSON/code/system text in it.
+- ALL data objects must be COMPLETE with every field populated with real content.
+- NEVER return empty arrays for questions in objective assignments.
+- NEVER return placeholder text like "..." or "TODO" — use real, specific content.
+- Match the course topic and difficulty when generating content.`;
 
 async function chat(messages, currentCourse) {
-  const msgs = [{ role: "system", content: CHAT_SYSTEM }];
+  let systemPrompt = CHAT_SYSTEM;
 
   if (currentCourse) {
-    msgs.push({ role: "system", content: `COURSE_CONTEXT:\n${compactCourse(currentCourse)}` });
+    systemPrompt += `\n\nCOURSE_CONTEXT:\n${compactCourse(currentCourse)}`;
   }
 
+  // Build user messages — last 8, truncate assistant messages
   const recent = messages
     .filter((m) => m.role === "user" || m.role === "assistant")
     .slice(-8)
-    .map((m) => ({ role: m.role, content: m.role === "assistant" ? m.content.slice(0, 200) : m.content }));
-  msgs.push(...recent);
+    .map((m) => ({
+      role: m.role,
+      content: m.role === "assistant" ? m.content.slice(0, 200) : m.content,
+    }));
 
-  const text = await callLLM(msgs, 3000);
+  const tokenLimit = currentCourse ? 8000 : 3000;
+  const text = await callLLM(systemPrompt, recent, tokenLimit);
   const parsed = safeJSON(text);
   if (parsed?.action) return parsed;
   if (parsed?.message) return { action: "chat", ...parsed };
-  return { action: "chat", message: "Could you rephrase that?" };
+  return { action: "chat", message: text.replace(/[{}]/g, "").slice(0, 300).trim() || "Could you rephrase that?" };
 }
 
 function compactCourse(c) {
-  if (!c?.weeks) return JSON.stringify(c).slice(0, 400);
+  if (!c?.weeks) return JSON.stringify(c).slice(0, 500);
   return JSON.stringify({
     title: c.title, difficulty: c.difficulty,
     weeks: c.weeks.map((w) => ({
       number: w.number, title: w.title,
       classes: (w.classes || []).map((cl) => ({
         number: cl.number, title: cl.title,
-        assignments: (cl.assignments || []).map((a) => `${a.type}:${a.title}`),
+        assignments: (cl.assignments || []).map((a, i) => {
+          const info = { index: i, type: a.type, title: a.title, difficulty: a.difficulty };
+          if (a.type === "objective") info.question_count = (a.questions || []).length;
+          if (a.type === "coding") info.has_starter_code = !!(a.starter_code && a.starter_code.trim());
+          if (a.type === "ide") info.file_count = (a.files || []).length;
+          return info;
+        }),
       })),
     })),
   });
@@ -94,7 +197,7 @@ function compactCourse(c) {
 // ═══════════════════════════════════════════════════════════
 
 async function generate(context, onProgress) {
-  // PASS 1: Generate course outline (titles + structure only — small token cost)
+  // PASS 1: Generate course outline
   const outlinePrompt = `Create a course outline as JSON.
 Topic: ${context.topic} | Audience: ${context.audience} | Duration: ${context.timeline}
 
@@ -106,25 +209,24 @@ Rules:
 - Make titles specific and descriptive
 - Difficulty: Beginner/Intermediate/Advanced based on audience`;
 
-  const outlineText = await callLLM([
-    { role: "system", content: "Generate course outlines as JSON. Be specific with titles." },
-    { role: "user", content: outlinePrompt },
-  ], 1000);
+  const outlineText = await callLLM(
+    "Generate course outlines as JSON. Be specific with titles.",
+    [{ role: "user", content: outlinePrompt }],
+    1500
+  );
 
   const outline = safeJSON(outlineText);
   if (!outline?.weeks) throw new Error("Failed to generate outline");
 
   const numWeeks = parseWeekCount(context.timeline);
-  // Ensure correct number of weeks
   while (outline.weeks.length < numWeeks) {
     outline.weeks.push({ number: outline.weeks.length + 1, title: `Advanced Topics ${outline.weeks.length + 1}`, classes: [{ number: 1, title: "Theory" }, { number: 2, title: "Practice" }] });
   }
   outline.weeks = outline.weeks.slice(0, numWeeks);
 
-  // Notify progress — outline ready
   if (onProgress) onProgress("outline", outline);
 
-  // PASS 2: Fill content for each week (separate LLM call per week — rich content)
+  // PASS 2: Fill content for each week
   for (let i = 0; i < outline.weeks.length; i++) {
     const week = outline.weeks[i];
     const weekPrompt = `Generate detailed content for Week ${week.number}: "${week.title}" of a course on "${outline.title}" for ${context.audience}.
@@ -156,10 +258,11 @@ Rules:
 - References must use real URLs (MDN, W3Schools, freeCodeCamp, etc)
 - Make content progressively harder (this is week ${week.number} of ${numWeeks})`;
 
-    const weekText = await callLLM([
-      { role: "system", content: "Generate detailed course content as JSON. Every field must have real content." },
-      { role: "user", content: weekPrompt },
-    ], 3500);
+    const weekText = await callLLM(
+      "Generate detailed course content as JSON. Every field must have real content.",
+      [{ role: "user", content: weekPrompt }],
+      4096
+    );
 
     const weekData = safeJSON(weekText);
     if (weekData?.classes) {
@@ -184,7 +287,6 @@ Rules:
         })),
       }));
     } else {
-      // Fallback: at least have structure
       outline.weeks[i].classes = (week.classes || []).map((cls, ci) => ({
         number: ci + 1,
         title: cls.title || `Class ${ci + 1}`,

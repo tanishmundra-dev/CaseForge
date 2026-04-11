@@ -54,9 +54,9 @@ export default function ClassDetailPage() {
     <div style={{ padding: "40px 48px 80px", maxWidth: 900, margin: "0 auto" }}>
       {/* Breadcrumb */}
       <div className="breadcrumb animate-in animate-in-1">
-        <Link href="/trainee/courses">Courses</Link>
+        <Link href="/student/courses">Courses</Link>
         <span className="separator">/</span>
-        <Link href={`/trainee/courses/${courseId}`}>{cls.course_title}</Link>
+        <Link href={`/student/courses/${courseId}`}>{cls.course_title}</Link>
         <span className="separator">/</span>
         <span className="current">{cls.title}</span>
       </div>
@@ -102,7 +102,7 @@ export default function ClassDetailPage() {
           {cls.assignments.map((asn, i) => (
             <Link
               key={asn.id}
-              href={`/trainee/courses/${courseId}/classes/${classId}/assignments/${asn.id}`}
+              href={`/student/courses/${courseId}/classes/${classId}/assignments/${asn.id}`}
               className="card"
               style={{
                 padding: "20px 24px",

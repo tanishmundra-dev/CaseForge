@@ -63,7 +63,7 @@ export default function WeeklyPlanPage() {
     <div style={{ padding: "40px 48px 80px", maxWidth: 900, margin: "0 auto" }}>
       {/* Breadcrumb */}
       <div className="breadcrumb animate-in animate-in-1">
-        <Link href="/trainee/courses">Courses</Link>
+        <Link href="/student/courses">Courses</Link>
         <span className="separator">/</span>
         <span className="current">{course.title}</span>
       </div>
@@ -110,7 +110,7 @@ export default function WeeklyPlanPage() {
             {week.classes.map((cls) => (
               <Link
                 key={cls.id}
-                href={`/trainee/courses/${courseId}/classes/${cls.id}`}
+                href={`/student/courses/${courseId}/classes/${cls.id}`}
                 className="card"
                 style={{
                   padding: "20px 24px",

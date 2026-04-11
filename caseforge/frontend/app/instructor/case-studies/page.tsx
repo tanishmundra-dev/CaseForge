@@ -21,6 +21,7 @@ export default function CourseManagementPage() {
   const loadCourses = () => {
     fetchAPI("/instructor/courses")
       .then(setCourses)
+      .catch(() => {})
       .finally(() => setLoading(false));
   };
 
@@ -64,18 +65,10 @@ export default function CourseManagementPage() {
             All Courses
           </h1>
         </div>
-        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-          <Link
-            href="/trainee/courses"
-            style={{ color: "var(--text-secondary)", fontSize: 14, fontWeight: 500 }}
-          >
-            &larr; Student View
-          </Link>
-          <Link href="/instructor/mission-control" className="btn-primary" style={{ fontSize: 13, padding: "8px 16px" }}>
-            <Plus size={16} />
-            Create Course
-          </Link>
-        </div>
+        <Link href="/instructor/mission-control?new=true" className="btn-primary" style={{ fontSize: 13, padding: "8px 16px" }}>
+          <Plus size={16} />
+          Create Course
+        </Link>
       </div>
 
       {loading ? (
@@ -89,7 +82,7 @@ export default function CourseManagementPage() {
           </p>
           <p style={{ color: "var(--text-tertiary)", marginTop: 8 }}>
             Head to{" "}
-            <Link href="/instructor/mission-control" style={{ color: "var(--accent)" }}>
+            <Link href="/instructor/mission-control?new=true" style={{ color: "var(--accent)" }}>
               Mission Control
             </Link>{" "}
             to create one.
