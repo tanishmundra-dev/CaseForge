@@ -1,0 +1,27 @@
+require("dotenv").config();
+const express = require("express");
+const cors = require("cors");
+const instructorRoutes = require("./routes/instructor");
+const traineeRoutes = require("./routes/trainee");
+
+const app = express();
+const PORT = process.env.PORT || 8000;
+
+app.use(
+  cors({
+    origin: ["http://localhost:3000", "http://localhost:3001"],
+    credentials: true,
+  })
+);
+app.use(express.json());
+
+app.get("/", (req, res) => {
+  res.json({ status: "ok", message: "CaseForge API is running" });
+});
+
+app.use("/api/instructor", instructorRoutes);
+app.use("/api/trainee", traineeRoutes);
+
+app.listen(PORT, () => {
+  console.log(`CaseForge backend running on http://localhost:${PORT}`);
+});
