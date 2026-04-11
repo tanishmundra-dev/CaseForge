@@ -64,17 +64,38 @@ function QuizView({ assignment, courseId, classId }: { assignment: AssignmentDet
   const [answers, setAnswers] = useState<Record<number, any>>({});
   const [submitted, setSubmitted] = useState(false);
   const [score, setScore] = useState<number | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const setAnswer = (qi: number, val: any) => setAnswers((p) => ({ ...p, [qi]: val }));
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     let correct = 0;
     questions.forEach((q: any, i: number) => {
       if (q.type === "mcq" && answers[i] === q.correct) correct++;
       if (q.type === "fill_up" && (answers[i] || "").toLowerCase().trim() === (q.answer || "").toLowerCase().trim()) correct++;
     });
-    setScore(Math.round((correct / Math.max(questions.length, 1)) * 100));
+    const finalScore = Math.round((correct / Math.max(questions.length, 1)) * 100);
+    const grade = finalScore >= 90 ? "A" : finalScore >= 80 ? "B+" : finalScore >= 70 ? "B" : finalScore >= 60 ? "C" : finalScore >= 50 ? "D" : "F";
+    setScore(finalScore);
     setSubmitted(true);
+
+    // Persist quiz score to backend
+    setSubmitting(true);
+    try {
+      await fetchAPI("/trainee/submit", {
+        method: "POST",
+        body: JSON.stringify({
+          course_id: courseId,
+          class_id: classId,
+          assignment_id: assignment.id,
+          assignment_type: "objective",
+          score: finalScore,
+          grade,
+          answers,
+        }),
+      });
+    } catch { /* silent — score is shown client-side regardless */ }
+    finally { setSubmitting(false); }
   };
 
   const isCorrect = (qi: number) => {
@@ -213,7 +234,7 @@ function IDEView({ assignment, courseId, classId }: { assignment: AssignmentDeta
       const code = Object.values(fileContents).join("\n\n// --- FILE SEPARATOR ---\n\n");
       const data = await fetchAPI("/trainee/submit", {
         method: "POST",
-        body: JSON.stringify({ course_id: courseId, class_id: classId, assignment_id: assignment.id, code, trainee_name: "Demo Trainee" }),
+        body: JSON.stringify({ course_id: courseId, class_id: classId, assignment_id: assignment.id, code, assignment_type: "coding" }),
       });
       setResult(data);
     } catch { alert("Submission failed."); }
@@ -299,12 +320,53 @@ function CodingSandbox({ assignment, courseId, classId, assignmentId }: { assign
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<GradingResult | null>(null);
   const [showHints, setShowHints] = useState(false);
+  const [showSolution, setShowSolution] = useState(false);
+  const [solutionCode, setSolutionCode] = useState<string | null>(null);
+  const [solutionLoading, setSolutionLoading] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([{ role: "assistant", content: "I can see your assignment and code. Ask me anything — I'll guide you without spoiling the solution." }]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
+  const handleGetSolution = async () => {
+    if (solutionCode !== null) { setShowSolution(!showSolution); return; }
+    setSolutionLoading(true);
+    try {
+      const data = await fetchAPI(`/trainee/assignments/${assignmentId}/solution`);
+      setSolutionCode(data.solution_code || "// No solution available");
+      setShowSolution(true);
+    } catch { setSolutionCode("// Failed to load solution"); setShowSolution(true); }
+    finally { setSolutionLoading(false); }
+  };
+
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+
+  // Auto-monitor: debounced code analysis — if student pauses 5s after writing 50+ chars, AI checks for issues
+  const lastCodeRef = useRef(code);
+  useEffect(() => {
+    if (code === lastCodeRef.current) return;
+    if (code.trim().length < 50) return;
+    lastCodeRef.current = code;
+
+    const timer = setTimeout(async () => {
+      if (chatLoading) return;
+      // Only auto-hint if the code has changed significantly and has potential issues
+      try {
+        const d = await fetchAPI("/trainee/companion/chat", {
+          method: "POST",
+          body: JSON.stringify({
+            messages: [{ role: "user", content: "[AUTO] The student is working on their code. Analyze the current code for any obvious bugs, syntax errors, or suboptimal approaches. If you see an issue, give a SHORT hint (1-2 sentences). If the code looks fine so far, respond with exactly: __SKIP__" }],
+            assignment,
+            current_code: code,
+          }),
+        });
+        if (d.content && !d.content.includes("__SKIP__") && d.content.length > 10) {
+          setMessages((p) => [...p, { role: "assistant", content: d.content }]);
+        }
+      } catch { /* silent */ }
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [code, assignment, chatLoading]);
 
   const handleRun = async () => {
     setRunning(true); setRunOutput(null);
@@ -315,7 +377,7 @@ function CodingSandbox({ assignment, courseId, classId, assignmentId }: { assign
 
   const handleSubmit = async () => {
     setSubmitting(true); setResult(null);
-    try { const d = await fetchAPI("/trainee/submit", { method: "POST", body: JSON.stringify({ course_id: courseId, class_id: classId, assignment_id: assignmentId, code, trainee_name: "Demo Trainee" }) }); setResult(d); }
+    try { const d = await fetchAPI("/trainee/submit", { method: "POST", body: JSON.stringify({ course_id: courseId, class_id: classId, assignment_id: assignmentId, code, assignment_type: "coding" }) }); setResult(d); }
     catch { alert("Grading failed."); }
     finally { setSubmitting(false); }
   };
@@ -397,9 +459,22 @@ function CodingSandbox({ assignment, courseId, classId, assignmentId }: { assign
               {runOutput.stderr && <pre style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--danger)", whiteSpace: "pre-wrap" }}>{runOutput.stderr}</pre>}
             </div>
           )}
+          {/* Solution panel (hidden until requested) */}
+          {showSolution && solutionCode && (
+            <div style={{ background: "#1a2332", borderTop: "1px solid var(--border)", padding: "12px 16px", maxHeight: 200, overflowY: "auto" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--accent)", textTransform: "uppercase" }}>Solution</span>
+                <button onClick={() => setShowSolution(false)} style={{ background: "transparent", border: "none", cursor: "pointer", color: "var(--text-tertiary)" }}><X size={14} /></button>
+              </div>
+              <pre style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "#a3e635", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{solutionCode}</pre>
+            </div>
+          )}
           <div style={{ display: "flex", gap: 10, padding: "12px 16px", borderTop: "1px solid var(--border)", background: "var(--bg-secondary)" }}>
             <button className="btn-secondary" onClick={handleRun} disabled={running} style={{ flex: 1 }}><Play size={14} /> {running ? "Running..." : "Run Code"}</button>
             <button className="btn-primary" onClick={handleSubmit} disabled={submitting} style={{ flex: 1 }}><Upload size={14} /> {submitting ? "Grading..." : "Submit"}</button>
+            <button onClick={handleGetSolution} disabled={solutionLoading} style={{ background: "none", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 14px", cursor: "pointer", color: showSolution ? "var(--accent)" : "var(--text-tertiary)", fontSize: 12, fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>
+              {solutionLoading ? "..." : showSolution ? "Hide Solution" : "Get Solution"}
+            </button>
           </div>
         </div>
 

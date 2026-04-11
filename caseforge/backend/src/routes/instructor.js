@@ -317,8 +317,41 @@ router.get("/analytics/submissions", async (req, res) => {
   const { data: subs } = await supabase
     .from("submissions")
     .select("*")
-    .order("overall_score", { ascending: false });
+    .order("submitted_at", { ascending: false });
   res.json(subs || []);
+});
+
+// ── Student Rankings (aggregated per student) ──
+router.get("/analytics/rankings", async (req, res) => {
+  const { data: subs } = await supabase.from("submissions").select("*");
+  const { data: students } = await supabase
+    .from("users")
+    .select("id, name, email")
+    .eq("role", "student");
+
+  const studentMap = {};
+  for (const st of students || []) studentMap[st.id] = st;
+
+  // Aggregate scores per student
+  const scores = {};
+  for (const s of subs || []) {
+    const key = s.student_id || s.trainee_name;
+    if (!scores[key]) scores[key] = { id: s.student_id, name: s.trainee_name, email: "", total: 0, count: 0, best: 0 };
+    scores[key].total += s.overall_score;
+    scores[key].count++;
+    if (s.overall_score > scores[key].best) scores[key].best = s.overall_score;
+    if (s.student_id && studentMap[s.student_id]) {
+      scores[key].name = studentMap[s.student_id].name;
+      scores[key].email = studentMap[s.student_id].email;
+    }
+  }
+
+  const ranked = Object.values(scores)
+    .map((v) => ({ ...v, avg: Math.round(v.total / v.count) }))
+    .sort((a, b) => b.avg - a.avg)
+    .map((v, i) => ({ ...v, rank: i + 1 }));
+
+  res.json(ranked);
 });
 
 router.get("/analytics/score-distribution", async (req, res) => {
@@ -356,6 +389,15 @@ router.post("/students/:studentId/enroll", async (req, res) => {
   const { course_id } = req.body;
   if (!course_id) return res.status(400).json({ error: "course_id required" });
 
+  // Check if already enrolled
+  const { data: existing } = await supabase
+    .from("enrollments")
+    .select("course_id")
+    .eq("student_id", studentId)
+    .eq("course_id", course_id)
+    .maybeSingle();
+  if (existing) return res.json({ success: true, message: "Already enrolled" });
+
   const { error } = await supabase.from("enrollments").insert({
     student_id: studentId,
     course_id,
@@ -392,8 +434,90 @@ router.get("/analytics/attendance", async (req, res) => {
   res.json(last7);
 });
 
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+// ── Student detail (progress per course) ──
+
+router.get("/students/:studentId/detail", async (req, res) => {
+  const { studentId } = req.params;
+
+  // Get student info
+  const { data: student } = await supabase
+    .from("users")
+    .select("id, name, email, role, created_at")
+    .eq("id", studentId)
+    .maybeSingle();
+  if (!student) return res.status(404).json({ error: "Student not found" });
+
+  // Get enrollments with course info
+  const { data: enrollments } = await supabase
+    .from("enrollments")
+    .select("course_id, enrolled_at")
+    .eq("student_id", studentId);
+
+  const courseIds = (enrollments || []).map((e) => e.course_id);
+  let courses = [];
+  if (courseIds.length > 0) {
+    const { data } = await supabase.from("courses").select("id, title, difficulty, status").in("id", courseIds);
+    courses = data || [];
+  }
+
+  // Get all submissions by this student (match by student_id OR trainee_name)
+  const { data: allSubs } = await supabase.from("submissions").select("*");
+  const studentSubs = (allSubs || []).filter(
+    (s) => s.student_id === studentId || s.trainee_name === student.name
+  );
+
+  // Build per-course progress
+  const courseProgress = courses.map((c) => {
+    const courseSubs = studentSubs.filter((s) => s.course_id === c.id);
+    const avg = courseSubs.length > 0
+      ? Math.round(courseSubs.reduce((sum, s) => sum + s.overall_score, 0) / courseSubs.length)
+      : 0;
+    return {
+      course_id: c.id,
+      title: c.title,
+      difficulty: c.difficulty,
+      status: c.status,
+      enrolled_at: (enrollments || []).find((e) => e.course_id === c.id)?.enrolled_at,
+      submissions: courseSubs.length,
+      avg_score: avg,
+      best_score: courseSubs.length > 0 ? Math.max(...courseSubs.map((s) => s.overall_score)) : 0,
+      latest_submission: courseSubs.length > 0
+        ? courseSubs.sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime())[0].submitted_at
+        : null,
+    };
+  });
+
+  // Overall stats
+  const totalSubs = studentSubs.length;
+  const overallAvg = totalSubs > 0
+    ? Math.round(studentSubs.reduce((sum, s) => sum + s.overall_score, 0) / totalSubs)
+    : 0;
+
+  // Rank among all students
+  const studentScores = {};
+  for (const s of allSubs || []) {
+    const key = s.student_id || s.trainee_name;
+    if (!studentScores[key]) studentScores[key] = { total: 0, count: 0 };
+    studentScores[key].total += s.overall_score;
+    studentScores[key].count++;
+  }
+  const ranked = Object.entries(studentScores)
+    .map(([key, v]) => ({ key, avg: Math.round(v.total / v.count) }))
+    .sort((a, b) => b.avg - a.avg);
+  const rank = ranked.findIndex((r) => r.key === studentId || r.key === student.name) + 1 || ranked.length + 1;
+
+  res.json({
+    student,
+    courses_enrolled: courses.length,
+    total_submissions: totalSubs,
+    overall_avg: overallAvg,
+    rank,
+    total_students: ranked.length,
+    course_progress: courseProgress,
+    recent_submissions: studentSubs
+      .sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime())
+      .slice(0, 20),
+  });
+});
 
 module.exports = router;

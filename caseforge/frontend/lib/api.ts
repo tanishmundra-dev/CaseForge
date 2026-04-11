@@ -1,8 +1,12 @@
 const API = "http://localhost:8000/api";
 
 export async function fetchAPI(path: string, options?: RequestInit) {
+  const token = typeof window !== "undefined" ? localStorage.getItem("caseforge_token") : null;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
   const res = await fetch(`${API}${path}`, {
-    headers: { "Content-Type": "application/json" },
+    headers,
     ...options,
   });
   if (!res.ok) {

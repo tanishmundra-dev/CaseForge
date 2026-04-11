@@ -53,6 +53,7 @@ async function migrate() {
         course_id TEXT REFERENCES courses(id) ON DELETE CASCADE,
         class_id TEXT,
         assignment_id TEXT,
+        student_id TEXT,
         trainee_name TEXT NOT NULL,
         code TEXT DEFAULT '',
         execution_output TEXT DEFAULT '',
@@ -64,6 +65,21 @@ async function migrate() {
         improvements JSONB DEFAULT '[]',
         submitted_at TIMESTAMPTZ DEFAULT now()
       );
+
+      -- Add student_id column if table already exists without it
+      DO $$ BEGIN
+        ALTER TABLE submissions ADD COLUMN IF NOT EXISTS student_id TEXT;
+      EXCEPTION WHEN others THEN NULL;
+      END $$;
+
+      -- Add type/questions/files columns to assignments if missing
+      DO $$ BEGIN
+        ALTER TABLE assignments ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'coding';
+        ALTER TABLE assignments ADD COLUMN IF NOT EXISTS questions JSONB DEFAULT '[]';
+        ALTER TABLE assignments ADD COLUMN IF NOT EXISTS files JSONB DEFAULT '[]';
+        ALTER TABLE assignments ADD COLUMN IF NOT EXISTS solution_code TEXT DEFAULT '';
+      EXCEPTION WHEN others THEN NULL;
+      END $$;
     `,
   });
 
@@ -103,12 +119,16 @@ CREATE TABLE IF NOT EXISTS assignments (
   title TEXT NOT NULL,
   description TEXT NOT NULL,
   difficulty TEXT DEFAULT 'Intermediate',
+  type TEXT DEFAULT 'coding',
   hints JSONB DEFAULT '[]',
   pitfalls JSONB DEFAULT '[]',
   aha_moment TEXT DEFAULT '',
   starter_code TEXT DEFAULT '',
+  solution_code TEXT DEFAULT '',
   test_cases JSONB DEFAULT '[]',
   rubric JSONB DEFAULT '[]',
+  questions JSONB DEFAULT '[]',
+  files JSONB DEFAULT '[]',
   class_id TEXT REFERENCES classes(id) ON DELETE CASCADE
 );
 
@@ -117,6 +137,7 @@ CREATE TABLE IF NOT EXISTS submissions (
   course_id TEXT REFERENCES courses(id) ON DELETE CASCADE,
   class_id TEXT,
   assignment_id TEXT,
+  student_id TEXT,
   trainee_name TEXT NOT NULL,
   code TEXT DEFAULT '',
   execution_output TEXT DEFAULT '',

@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { fetchAPI } from "@/lib/api";
+import Link from "next/link";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell } from "recharts";
 
 interface Summary { total_trainees: number; total_submissions: number; avg_score: number; completion_rate: number; courses_published: number; }
@@ -10,6 +11,7 @@ export default function AnalyticsPage() {
   const [scoreDist, setScoreDist] = useState<any[]>([]);
   const [submissions, setSubmissions] = useState<any[]>([]);
   const [attendance, setAttendance] = useState<any[]>([]);
+  const [rankings, setRankings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -18,8 +20,9 @@ export default function AnalyticsPage() {
       fetchAPI("/instructor/analytics/submissions"),
       fetchAPI("/instructor/analytics/score-distribution"),
       fetchAPI("/instructor/analytics/attendance"),
-    ]).then(([s, sub, sd, att]) => {
-      setSummary(s); setSubmissions(sub); setScoreDist(sd); setAttendance(att);
+      fetchAPI("/instructor/analytics/rankings"),
+    ]).then(([s, sub, sd, att, rnk]) => {
+      setSummary(s); setSubmissions(sub); setScoreDist(sd); setAttendance(att); setRankings(rnk);
     }).catch(() => {}).finally(() => setLoading(false));
   }, []);
 
@@ -85,31 +88,42 @@ export default function AnalyticsPage() {
         </div>
       </div>
 
-      {/* Leaderboard */}
+      {/* Student Rankings */}
       <div className="animate-in animate-in-4">
-        <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 16 }}>Leaderboard</h3>
+        <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 16 }}>Student Rankings</h3>
         <div className="card" style={{ padding: 0, overflow: "hidden" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
             <thead>
               <tr style={{ borderBottom: "1px solid var(--border)" }}>
                 <th style={{ padding: "12px 20px", textAlign: "left", color: "var(--text-tertiary)", fontSize: 11, textTransform: "uppercase" }}>Rank</th>
                 <th style={{ padding: "12px 20px", textAlign: "left", color: "var(--text-tertiary)", fontSize: 11, textTransform: "uppercase" }}>Student</th>
-                <th style={{ padding: "12px 20px", textAlign: "left", color: "var(--text-tertiary)", fontSize: 11, textTransform: "uppercase" }}>Assignment</th>
-                <th style={{ padding: "12px 20px", textAlign: "right", color: "var(--text-tertiary)", fontSize: 11, textTransform: "uppercase" }}>Score</th>
-                <th style={{ padding: "12px 20px", textAlign: "right", color: "var(--text-tertiary)", fontSize: 11, textTransform: "uppercase" }}>Grade</th>
+                <th style={{ padding: "12px 20px", textAlign: "center", color: "var(--text-tertiary)", fontSize: 11, textTransform: "uppercase" }}>Submissions</th>
+                <th style={{ padding: "12px 20px", textAlign: "right", color: "var(--text-tertiary)", fontSize: 11, textTransform: "uppercase" }}>Avg Score</th>
+                <th style={{ padding: "12px 20px", textAlign: "right", color: "var(--text-tertiary)", fontSize: 11, textTransform: "uppercase" }}>Best</th>
+                <th style={{ padding: "12px 20px", textAlign: "right", color: "var(--text-tertiary)", fontSize: 11, textTransform: "uppercase" }}>Progress</th>
               </tr>
             </thead>
             <tbody>
-              {submissions.slice(0, 15).map((s: any, i: number) => (
-                <tr key={s.id || i} style={{ borderBottom: "1px solid var(--border)" }}>
-                  <td style={{ padding: "10px 20px", fontFamily: "var(--font-mono)", color: i < 3 ? "var(--accent)" : "var(--text-secondary)", fontWeight: i < 3 ? 700 : 400 }}>#{i + 1}</td>
-                  <td style={{ padding: "10px 20px", fontWeight: 500 }}>{s.trainee_name}</td>
-                  <td style={{ padding: "10px 20px", color: "var(--text-secondary)", fontSize: 13 }}>{s.assignment_id}</td>
-                  <td style={{ padding: "10px 20px", textAlign: "right", fontFamily: "var(--font-mono)" }}>
-                    <span style={{ color: s.overall_score >= 80 ? "var(--success)" : s.overall_score >= 60 ? "var(--warning)" : "var(--danger)" }}>{s.overall_score}</span>
+              {rankings.map((r: any) => (
+                <tr key={r.id || r.name} style={{ borderBottom: "1px solid var(--border)" }}>
+                  <td style={{ padding: "10px 20px", fontFamily: "var(--font-mono)", color: r.rank <= 3 ? "var(--accent)" : "var(--text-secondary)", fontWeight: r.rank <= 3 ? 700 : 400 }}>#{r.rank}</td>
+                  <td style={{ padding: "10px 20px" }}>
+                    {r.id ? (
+                      <Link href={`/instructor/students/${r.id}`} style={{ fontWeight: 500, color: "var(--text-heading)", textDecoration: "none" }}>{r.name}</Link>
+                    ) : (
+                      <span style={{ fontWeight: 500 }}>{r.name}</span>
+                    )}
+                    {r.email && <span style={{ display: "block", fontSize: 11, color: "var(--text-tertiary)", fontFamily: "var(--font-mono)" }}>{r.email}</span>}
                   </td>
+                  <td style={{ padding: "10px 20px", textAlign: "center", fontFamily: "var(--font-mono)", color: "var(--text-secondary)" }}>{r.count}</td>
                   <td style={{ padding: "10px 20px", textAlign: "right" }}>
-                    <span className={`badge ${s.overall_score >= 80 ? "badge-success" : s.overall_score >= 60 ? "badge-warning" : "badge-danger"}`} style={{ fontSize: 10 }}>{s.grade}</span>
+                    <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600, color: r.avg >= 80 ? "var(--success)" : r.avg >= 60 ? "var(--warning)" : "var(--danger)" }}>{r.avg}%</span>
+                  </td>
+                  <td style={{ padding: "10px 20px", textAlign: "right", fontFamily: "var(--font-mono)", color: "var(--text-secondary)" }}>{r.best}%</td>
+                  <td style={{ padding: "10px 20px", textAlign: "right" }}>
+                    <div style={{ width: 80, height: 6, background: "var(--bg-tertiary)", borderRadius: 3, overflow: "hidden", display: "inline-block" }}>
+                      <div style={{ height: "100%", width: `${Math.min(r.avg, 100)}%`, background: r.avg >= 80 ? "var(--success)" : r.avg >= 60 ? "var(--warning)" : "var(--danger)", borderRadius: 3 }} />
+                    </div>
                   </td>
                 </tr>
               ))}

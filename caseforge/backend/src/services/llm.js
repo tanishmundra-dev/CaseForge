@@ -26,13 +26,34 @@ async function callLLM(systemPrompt, userMessages, maxTokens = 4000) {
 
       // Build contents array for Gemini
       // Gemini uses "user" and "model" roles, system instruction is separate
-      const contents = [];
-      for (const msg of userMessages) {
-        contents.push({
-          role: msg.role === "assistant" ? "model" : "user",
-          parts: [{ text: msg.content }],
-        });
+      // Merge consecutive same-role messages and ensure first message is "user"
+      const raw = userMessages.map((msg) => ({
+        role: msg.role === "assistant" ? "model" : "user",
+        text: msg.content,
+      }));
+
+      // Merge consecutive same-role messages
+      const merged = [];
+      for (const r of raw) {
+        if (merged.length > 0 && merged[merged.length - 1].role === r.role) {
+          merged[merged.length - 1].text += "\n" + r.text;
+        } else {
+          merged.push({ ...r });
+        }
       }
+
+      // Ensure first message is "user"
+      if (merged.length > 0 && merged[0].role === "model") {
+        merged.shift();
+      }
+      if (merged.length === 0) {
+        merged.push({ role: "user", text: "Hello" });
+      }
+
+      const contents = merged.map((m) => ({
+        role: m.role,
+        parts: [{ text: m.text }],
+      }));
 
       const result = await model.generateContent({
         contents,
@@ -237,7 +258,7 @@ Return JSON: {"classes":[
     "description":"Detailed 3-4 sentence description of what students learn",
     "references":[{"title":"Resource","url":"https://real-url","description":"Why useful"}],
     "assignments":[
-      {"title":"Coding Exercise","description":"What to build","type":"coding","difficulty":"...","starter_code":"// real code\\nfunction solve() {}","test_cases":[{"input":"x","expected_output":"y","description":"test"}],"rubric":[{"criterion":"Correctness","excellent":"...","acceptable":"...","poor":"...","weight":50}],"hints":["hint"],"pitfalls":["pitfall"],"aha_moment":"insight"},
+      {"title":"Coding Exercise","description":"What to build","type":"coding","difficulty":"...","starter_code":"// real starter code with TODOs\\nfunction solve() {}","solution_code":"// complete working solution\\nfunction solve() { return 42; }","test_cases":[{"input":"x","expected_output":"y","description":"test"}],"rubric":[{"criterion":"Correctness","excellent":"...","acceptable":"...","poor":"...","weight":50}],"hints":["hint"],"pitfalls":["pitfall"],"aha_moment":"insight"},
       {"title":"Quiz","description":"Test understanding","type":"objective","difficulty":"...","questions":[{"type":"mcq","question":"Q?","options":["A","B","C","D"],"correct":0,"explanation":"Why"},{"type":"mcq","question":"Q2?","options":["A","B","C","D"],"correct":1,"explanation":"Why"},{"type":"fill_up","question":"The ___ is...","answer":"ans","explanation":"Why"}]}
     ]
   },

@@ -2,11 +2,12 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth";
-import { LogOut, BookOpen, TrendingUp } from "lucide-react";
+import { LogOut, BookOpen, TrendingUp, MessageSquare } from "lucide-react";
 
 const NAV_ITEMS = [
   { label: "My Courses", href: "/student/courses", icon: BookOpen },
   { label: "My Progress", href: "/student/progress", icon: TrendingUp },
+  { label: "AI Feedback", href: "/student/feedback", icon: MessageSquare },
 ];
 
 export default function StudentNavbar() {

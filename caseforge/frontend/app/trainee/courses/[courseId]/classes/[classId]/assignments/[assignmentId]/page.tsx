@@ -130,7 +130,7 @@ function SandboxContent() {
           class_id: classId,
           assignment_id: assignmentId,
           code,
-          trainee_name: "Demo Trainee",
+          assignment_type: "coding",
         }),
       });
       setResult(data);

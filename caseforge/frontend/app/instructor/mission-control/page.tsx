@@ -145,8 +145,6 @@ function MissionControlInner() {
       const action = result.action || "chat";
       const msg = typeof result.message === "string" ? result.message : "Done.";
 
-      setLoading(false);
-
       switch (action) {
         case "generate":
           await animateMessage(msg);
@@ -162,8 +160,9 @@ function MissionControlInner() {
           break;
       }
     } catch {
-      setLoading(false);
       setMessages((p) => [...p, { role: "assistant", content: "Something went wrong. Please try again." }]);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -359,11 +358,11 @@ function MissionControlInner() {
                   break;
                 }
                 case "done":
+                  setIsStreaming(false);
                   if (d.course) {
                     setCourse(d.course);
                     expandAll(d.course);
                   }
-                  setIsStreaming(false);
                   await animateMessage("Course generated! Click any text to edit, or tell me what to change.");
                   break;
                 case "error":
@@ -378,6 +377,7 @@ function MissionControlInner() {
       }
     } catch {
       setMessages((p) => [...p, { role: "assistant", content: "Generation failed. Try again." }]);
+    } finally {
       setIsStreaming(false);
     }
   };

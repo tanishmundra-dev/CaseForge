@@ -41,4 +41,15 @@ function requireRole(role) {
   };
 }
 
-module.exports = { generateToken, verifyToken, authMiddleware, requireRole, JWT_SECRET };
+// Soft auth — sets req.user if token valid, continues regardless
+function optionalAuth(req, res, next) {
+  const header = req.headers.authorization;
+  if (header && header.startsWith("Bearer ")) {
+    try {
+      req.user = verifyToken(header.split(" ")[1]);
+    } catch { /* ignore */ }
+  }
+  next();
+}
+
+module.exports = { generateToken, verifyToken, authMiddleware, optionalAuth, requireRole, JWT_SECRET };

@@ -1,7 +1,8 @@
 "use client";
 import { useState, useEffect } from "react";
 import { fetchAPI } from "@/lib/api";
-import { UserPlus, Mail, BookOpen, Plus } from "lucide-react";
+import { UserPlus, Mail, BookOpen, Plus, ArrowRight } from "lucide-react";
+import Link from "next/link";
 
 export default function StudentsPage() {
   const [students, setStudents] = useState<any[]>([]);
@@ -129,7 +130,11 @@ export default function StudentsPage() {
             <tbody>
               {students.map((s: any) => (
                 <tr key={s.id} style={{ borderBottom: "1px solid var(--border)" }}>
-                  <td style={{ padding: "12px 20px", fontWeight: 500 }}>{s.name}</td>
+                  <td style={{ padding: "12px 20px", fontWeight: 500 }}>
+                    <Link href={`/instructor/students/${s.id}`} style={{ color: "var(--text-heading)", textDecoration: "none", display: "flex", alignItems: "center", gap: 6 }}>
+                      {s.name} <ArrowRight size={12} color="var(--accent)" style={{ opacity: 0.4 }} />
+                    </Link>
+                  </td>
                   <td style={{ padding: "12px 20px", color: "var(--text-secondary)", fontFamily: "var(--font-mono)", fontSize: 13 }}>{s.email}</td>
                   <td style={{ padding: "12px 20px", color: "var(--text-tertiary)", fontSize: 13 }}>{s.created_at ? new Date(s.created_at).toLocaleDateString() : "—"}</td>
                   <td style={{ padding: "12px 20px", textAlign: "right" }}>
