@@ -412,7 +412,14 @@ function MissionControlInner() {
                     setCourse(d.course);
                     expandAll(d.course);
                   }
-                  await animateMessage("Course generated! Click any text to edit, or tell me what to change.");
+                  // Show critic feedback if available
+                  const critic = d.course?._critic;
+                  if (critic && critic.verdict) {
+                    const criticMsg = `Course generated! Quality: ${critic.overall_score || "?"}/10 — ${critic.verdict}${critic.suggestions?.length ? "\n\nSuggestions: " + critic.suggestions.join(" | ") : ""}`;
+                    await animateMessage(criticMsg);
+                  } else {
+                    await animateMessage("Course generated! Click any text to edit, or tell me what to change.");
+                  }
                   break;
                 case "error":
                   setIsStreaming(false);
@@ -492,6 +499,54 @@ function MissionControlInner() {
       </div>
     );
     return <Tag className={className} style={{ ...style, cursor: "pointer" }} onClick={(e: any) => { e.stopPropagation(); startEdit(id, val); }} title="Click to edit">{val}<Pencil size={10} style={{ marginLeft: 4, opacity: 0.2, verticalAlign: "middle" }} /></Tag>;
+  };
+
+  const UnitPreview = ({ unit, index, unitIcons, unitColors }: { unit: any; index: number; unitIcons: Record<string, string>; unitColors: Record<string, string> }) => {
+    const [open, setOpen] = useState(false);
+    return (
+      <div style={{ borderBottom: "1px solid var(--border)" }}>
+        <div onClick={() => setOpen(!open)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", cursor: "pointer", background: open ? "var(--bg-secondary)" : "var(--bg-primary)" }}>
+          <span style={{ width: 24, height: 24, borderRadius: 6, background: (unitColors[unit.type] || "var(--text-tertiary)") + "18", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, flexShrink: 0 }}>
+            {unitIcons[unit.type] || "•"}
+          </span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-heading)" }}>{unit.title}</span>
+          </div>
+          <span style={{ fontSize: 10, color: "var(--text-tertiary)", fontFamily: "var(--font-mono)", textTransform: "uppercase", flexShrink: 0 }}>{unit.type}</span>
+          <span style={{ fontSize: 10, color: "var(--text-tertiary)", fontFamily: "var(--font-mono)", flexShrink: 0 }}>{unit.duration || "?"}m</span>
+          {open ? <ChevronDown size={12} color="var(--text-tertiary)" /> : <ChevronRight size={12} color="var(--text-tertiary)" />}
+        </div>
+        {open && unit.content && (
+          <div style={{ padding: "12px 16px 12px 50px", background: "var(--bg-secondary)", maxHeight: 300, overflowY: "auto" }}>
+            <div
+              style={{ fontSize: 12, lineHeight: 1.7, color: "var(--text-secondary)" }}
+              dangerouslySetInnerHTML={{ __html: (unit.content || "")
+                .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre style="background:#1a1a18;color:#e8e4df;padding:10px;border-radius:6px;font-size:11px;font-family:var(--font-mono);overflow-x:auto;margin:6px 0;line-height:1.4"><code>$2</code></pre>')
+                .replace(/`([^`]+)`/g, '<code style="background:var(--bg-tertiary);padding:1px 4px;border-radius:3px;font-size:11px;font-family:var(--font-mono)">$1</code>')
+                .replace(/^### (.+)$/gm, '<h4 style="font-size:13px;font-weight:700;margin:12px 0 4px;color:var(--text-heading)">$1</h4>')
+                .replace(/^## (.+)$/gm, '<h3 style="font-size:14px;font-weight:700;margin:16px 0 6px;color:var(--text-heading)">$1</h3>')
+                .replace(/^# (.+)$/gm, '<h2 style="font-size:16px;font-weight:700;margin:0 0 8px;color:var(--accent)">$1</h2>')
+                .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                .replace(/\*(.+?)\*/g, '<em>$1</em>')
+                .replace(/^- (.+)$/gm, '<li style="margin:2px 0">$1</li>')
+                .replace(/((?:<li[^>]*>.*<\/li>\n?)+)/g, '<ul style="margin:4px 0 4px 16px;list-style:disc">$1</ul>')
+                .replace(/\n\n/g, '<br/><br/>')
+              }}
+            />
+            {(unit.video_search_query || unit.video_url) && (() => {
+              const query = unit.video_search_query || unit.title || "";
+              return (
+                <a href={`https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`} target="_blank" rel="noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 8, padding: "6px 12px", background: "#DC262610", borderRadius: 6, border: "1px solid #DC262618", textDecoration: "none" }}>
+                  <span style={{ fontSize: 14 }}>▶</span>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: "#DC2626" }}>{unit.video_channel || "YouTube"}</span>
+                  <ExternalLink size={9} color="var(--text-tertiary)" />
+                </a>
+              );
+            })()}
+          </div>
+        )}
+      </div>
+    );
   };
 
   const typeIcon = (t: string) => t === "objective" ? <FileText size={12} /> : <Code size={12} />;
@@ -576,10 +631,13 @@ function MissionControlInner() {
                                   <Editable id={`cd.${week.number}.${cls.number}`} val={cls.description || ""} as="p" style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6, marginBottom: 16 }} />
                                 )}
 
-                                {/* Theory Content — Expandable */}
-                                {cls.theory_content && cls.theory_content.trim() && (() => {
+                                {/* Learning Units (Coursera-style) */}
+                                {cls.learning_units && cls.learning_units.length > 0 ? (() => {
                                   const tKey = `${week.number}-${cls.number}`;
                                   const tOpen = expandedTheory.has(tKey);
+                                  const unitIcons: Record<string, string> = { video: "▶", reading: "📖", activity: "🔧", quiz: "✓" };
+                                  const unitColors: Record<string, string> = { video: "#DC2626", reading: "var(--accent)", activity: "#16A34A", quiz: "#7C3AED" };
+                                  const totalMins = cls.learning_units.reduce((s: number, u: any) => s + (u.duration || 0), 0);
                                   return (
                                   <div style={{ marginBottom: 14 }}>
                                     <div
@@ -588,31 +646,41 @@ function MissionControlInner() {
                                     >
                                       {tOpen ? <ChevronDown size={13} color="var(--accent)" /> : <ChevronRight size={13} color="var(--accent)" />}
                                       <BookOpen size={13} color="var(--accent)" />
-                                      <span style={{ fontSize: 12, fontWeight: 600, color: "var(--accent)", flex: 1 }}>Study Material / Lecture Notes</span>
-                                      <span style={{ fontSize: 10, color: "var(--text-tertiary)", fontFamily: "var(--font-mono)" }}>{Math.round(cls.theory_content.length / 5)} words</span>
+                                      <span style={{ fontSize: 12, fontWeight: 600, color: "var(--accent)", flex: 1 }}>Learning Units</span>
+                                      <span style={{ fontSize: 10, color: "var(--text-tertiary)", fontFamily: "var(--font-mono)" }}>{cls.learning_units.length} units &middot; {totalMins} min</span>
                                     </div>
                                     {tOpen && (
-                                      <div style={{ padding: "16px 20px", background: "var(--bg-secondary)", border: "1px solid var(--border)", borderTop: "none", borderRadius: "0 0 8px 8px", maxHeight: 500, overflowY: "auto" }}>
-                                        <div
-                                          style={{ fontSize: 13, lineHeight: 1.8, color: "var(--text-primary)" }}
-                                          dangerouslySetInnerHTML={{ __html: cls.theory_content
-                                            .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre style="background:#1a1a18;color:#e8e4df;padding:12px;border-radius:6px;font-size:11px;font-family:var(--font-mono);overflow-x:auto;margin:8px 0;line-height:1.5"><code>$2</code></pre>')
-                                            .replace(/`([^`]+)`/g, '<code style="background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;font-size:12px;font-family:var(--font-mono)">$1</code>')
-                                            .replace(/^### (.+)$/gm, '<h4 style="font-size:14px;font-weight:700;margin:16px 0 6px;color:var(--text-heading)">$1</h4>')
-                                            .replace(/^## (.+)$/gm, '<h3 style="font-size:16px;font-weight:700;margin:20px 0 8px;color:var(--text-heading)">$1</h3>')
-                                            .replace(/^# (.+)$/gm, '<h2 style="font-size:18px;font-weight:700;margin:0 0 12px;color:var(--accent)">$1</h2>')
-                                            .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-                                            .replace(/\*(.+?)\*/g, '<em>$1</em>')
-                                            .replace(/^- (.+)$/gm, '<li style="margin:3px 0">$1</li>')
-                                            .replace(/((?:<li[^>]*>.*<\/li>\n?)+)/g, '<ul style="margin:6px 0 6px 18px;list-style:disc">$1</ul>')
-                                            .replace(/\n\n/g, '<br/><br/>')
-                                          }}
-                                        />
+                                      <div style={{ border: "1px solid var(--border)", borderTop: "none", borderRadius: "0 0 8px 8px", overflow: "hidden" }}>
+                                        {cls.learning_units.map((unit: any, ui: number) => (
+                                          <UnitPreview key={ui} unit={unit} index={ui} unitIcons={unitIcons} unitColors={unitColors} />
+                                        ))}
                                       </div>
                                     )}
                                   </div>
                                   );
-                                })()}
+                                })() : cls.theory_content && cls.theory_content.trim() ? (() => {
+                                  /* Fallback: old-style theory_content blob */
+                                  const tKey = `${week.number}-${cls.number}-legacy`;
+                                  const tOpen = expandedTheory.has(tKey);
+                                  return (
+                                  <div style={{ marginBottom: 14 }}>
+                                    <div
+                                      onClick={() => setExpandedTheory((p) => { const s = new Set(p); s.has(tKey) ? s.delete(tKey) : s.add(tKey); return s; })}
+                                      style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px", background: "var(--bg-secondary)", borderRadius: tOpen ? "8px 8px 0 0" : 8, border: "1px solid var(--border)", cursor: "pointer", userSelect: "none" }}
+                                    >
+                                      {tOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} color="var(--text-tertiary)" />}
+                                      <BookOpen size={13} color="var(--text-tertiary)" />
+                                      <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", flex: 1 }}>Study Material (Legacy)</span>
+                                      <span style={{ fontSize: 10, color: "var(--text-tertiary)", fontFamily: "var(--font-mono)" }}>{Math.round(cls.theory_content.length / 5)} words</span>
+                                    </div>
+                                    {tOpen && (
+                                      <div style={{ padding: "16px 20px", background: "var(--bg-secondary)", border: "1px solid var(--border)", borderTop: "none", borderRadius: "0 0 8px 8px", maxHeight: 500, overflowY: "auto" }}>
+                                        <div style={{ fontSize: 13, lineHeight: 1.8, color: "var(--text-primary)", whiteSpace: "pre-wrap" }}>{cls.theory_content.slice(0, 2000)}{cls.theory_content.length > 2000 ? "\n\n..." : ""}</div>
+                                      </div>
+                                    )}
+                                  </div>
+                                  );
+                                })() : null}
 
                                 {/* Assignments */}
                                 {cls.assignments.map((asn, ai) => (

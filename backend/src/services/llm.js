@@ -353,108 +353,112 @@ Example assignments: [${quizExample}]`;
     }
 
     // ────────────────────────────────────────────────
-    // PASS 2A: Generate DEEP lecture notes per class
+    // PASS 2A: Generate structured LEARNING UNITS per class (Coursera-style)
     // ────────────────────────────────────────────────
     const classContents = [];
     for (let ci = 0; ci < (week.classes || []).length; ci++) {
       const classTitle = week.classes[ci]?.title || `Class ${ci + 1}`;
       const phase = week.number <= Math.ceil(numWeeks / 3) ? "FOUNDATIONS" : week.number <= Math.ceil(numWeeks * 2 / 3) ? "INTERMEDIATE" : "ADVANCED";
-      const lecturePrompt = `You are a world-class instructor who has taught 100,000+ students on Coursera and Udemy. You are writing a COMPLETE lecture for a paid premium course ($100+ value).
 
-YOUR PEDAGOGY: Start from INTUITION → then formal concept → then APPLICATION → then edge cases. Every section must answer "Why does this matter?" before diving in. Use Bloom's Taxonomy: Remember → Understand → Apply → Analyze → Evaluate → Create.
+      if (onProgress) onProgress("status", { message: `Designing learning units for Week ${week.number}, Class ${ci + 1}...` });
+
+      const unitsPrompt = `You are a Course Platform Designer who designs courses like Coursera/Udemy. You structure content into individually completable Learning Units that mix passive learning (video/reading) with active practice (activity/quiz).
 
 Course: "${outline.title}" | Audience: ${context.audience} | Level: ${outline.difficulty || "Intermediate"}
 Week ${week.number}/${numWeeks}: "${week.title}" > Class ${ci + 1}: "${classTitle}"
-Phase: ${phase} — ${phase === "FOUNDATIONS" ? "Build strong intuition and mental models. Assume ZERO prior knowledge of this specific topic." : phase === "INTERMEDIATE" ? "Apply concepts to real-world scenarios. Challenge assumptions. Introduce complexity." : "Production-grade thinking. Trade-offs, optimization, architecture decisions. Prepare for interviews and real jobs."}
+Phase: ${phase} — ${phase === "FOUNDATIONS" ? "Build intuition from zero. Assume no prior knowledge of this topic." : phase === "INTERMEDIATE" ? "Apply to real-world scenarios. Introduce complexity and trade-offs." : "Production-grade thinking. Optimization, architecture, interview prep."}
 
-Write a COMPLETE lecture in markdown. This is the ONLY study material students have before attempting assignments. It must teach the topic thoroughly enough that a student with ZERO prior knowledge of this specific topic can understand it, practice it, and pass certification-level assessments.
+Design this class as a sequence of 6-10 Learning Units. Each unit is individually completable (like Coursera modules).
 
-REQUIRED STRUCTURE (follow this exactly):
+UNIT TYPE RULES:
+- "video": For concept introductions, storytelling, walkthroughs. Content = detailed transcript/explanation (500+ words). Include a YouTube recommendation from a real channel if the topic is common.
+- "reading": For structured reference material, definitions, frameworks, deep-dives. Content = comprehensive markdown (800+ words). ${isCodingCourse ? "Include real runnable code blocks with explanations." : "Include real-world case studies."}
+- "activity": For immediate hands-on practice. Content = clear instructions for what the student should do/think about. Short (100-200 words).
+- "quiz": For reinforcement after a concept. MUST include a "questions" array with 3-5 structured questions. Each question: {"question":"...", "options":["A","B","C","D"], "correct":0, "explanation":"..."} for MCQ, or {"question":"The ___ is...", "type":"fill_up", "answer":"...", "explanation":"..."} for fill-up. These are interactive and graded in the UI.
 
-# ${classTitle}
+STRUCTURE RULES:
+- Start with a "video" or "reading" unit that hooks the student (a problem, a story, a real-world scenario)
+- Alternate between passive (video/reading) and active (activity/quiz) — never 3 passive units in a row
+- Each concept: introduce via video/reading → reinforce via activity/quiz
+- End with a "reading" unit summarizing key takeaways + what's next
+- Total class duration: 60-90 minutes
+- No unit should exceed 20 minutes
 
-## Learning Objectives
-- List 4-6 specific, measurable learning objectives ("By the end of this lesson, you will be able to...")
+CONTENT QUALITY ($150 paid course bar):
+- "video" units: Write as a detailed transcript. Start with "Why does this matter?". Use analogies. ${isCodingCourse ? "Include screen-recording style walkthroughs: 'Now open your terminal and type...'" : "Include real company examples."}
+- "reading" units: Deep, structured, with headers. Include 💡 Pro Tips, ⚠️ Common Mistakes, 🎯 Key Insights. ${isCodingCourse ? "8+ code blocks with real runnable code." : "Real-world case studies with specific details."}
+- "activity" units: Specific, actionable tasks. "Open your editor and..." or "Think about how you would..."
+- "quiz" units: Technical questions that test understanding, not memorization. Include explanations.
+- NO filler. NO "In this section...". Every sentence must teach something.
+- For video units: provide a "video_search_query" — a SPECIFIC YouTube search query (5-10 words) that will find a relevant tutorial. Example: "Docker compose multi container tutorial 2024". Also suggest a channel name.
+- NEVER generate fake YouTube URLs — only generate search queries
+- For niche topics, mark as "AI-generated lecture" and write the full content yourself
 
-## Prerequisites
-- What the student should know before this lesson (reference previous weeks/classes if applicable)
+Return JSON:
+{
+  "description": "3-4 sentence class description — what transformation happens",
+  "learning_units": [
+    {
+      "type": "video",
+      "title": "Why ${classTitle} Matters",
+      "duration": 12,
+      "content": "Full detailed content in markdown (500+ words for video, 800+ for reading)...",
+      "completion_type": "auto",
+      "video_search_query": "specific YouTube search query to find a relevant tutorial, e.g. 'Python Docker containerize flask app tutorial 2024'",
+      "video_channel": "Recommended channel to look for (e.g. 'Traversy Media', 'freeCodeCamp', 'Fireship')"
+    },
+    {
+      "type": "reading",
+      "title": "Deep Dive: Core Concept",
+      "duration": 15,
+      "content": "# Heading\\n\\nFull markdown content with code blocks, examples, pro tips...",
+      "completion_type": "auto"
+    },
+    {
+      "type": "activity",
+      "title": "Hands-On: Try It Yourself",
+      "duration": 10,
+      "content": "Step-by-step instructions for what to do...",
+      "completion_type": "manual"
+    },
+    {
+      "type": "quiz",
+      "title": "Check Your Understanding",
+      "duration": 5,
+      "content": "Test your understanding of the concepts covered so far.",
+      "completion_type": "graded",
+      "questions": [
+        {"question": "What is X?", "options": ["A", "B", "C", "D"], "correct": 0, "explanation": "A is correct because..."},
+        {"question": "Which of these is true about Y?", "options": ["Option 1", "Option 2", "Option 3", "Option 4"], "correct": 2, "explanation": "Option 3 because..."},
+        {"question": "The ___ is used to...", "type": "fill_up", "answer": "keyword", "explanation": "Because..."}
+      ]
+    }
+  ]
+}`;
 
-## Introduction
-- Why this topic matters (real-world context, industry relevance)
-- Where this fits in the bigger picture of the course
-- A motivating example or scenario (3-4 paragraphs)
-
-## Core Concepts
-### [Concept 1 Name]
-- Detailed explanation with examples (not just definitions)
-- Diagrams described in text if relevant
-- Common misconceptions addressed
-${isCodingCourse ? "- Code examples with line-by-line explanation" : "- Worked examples with step-by-step reasoning"}
-
-### [Concept 2 Name]
-- Same depth as above
-- Build on Concept 1 where possible
-
-### [Concept 3+ Name]
-- Continue for all key concepts (typically 3-5 per class)
-
-## Deep Dive / Advanced Details
-- Edge cases, gotchas, performance considerations
-- Industry best practices
-- How professionals actually use this in production
-${isCodingCourse ? "- Common bugs and how to debug them\n- Time/space complexity analysis where relevant" : "- Common mistakes in applying these concepts\n- How experts think about this differently than beginners"}
-
-## Worked Examples
-- 2-3 complete worked examples, starting simple and increasing complexity
-${isCodingCourse ? "- Full code with comments explaining each step\n- Show the output and explain why" : "- Step-by-step solutions to realistic problems"}
-
-## Practice Exercises (conceptual)
-- 3-4 quick self-check questions (not graded, just for self-assessment)
-- Answers included inline
-
-## Key Takeaways
-- Bullet-point summary of the most important concepts
-- "Remember this" highlights
-
-## What's Next
-- Brief preview of how this connects to the next class/topic
-
-QUALITY BAR (this is a $150 paid course — match that quality):
-- MINIMUM 2000 words (aim for 3000+ for technical topics)
-- Every concept: intuition FIRST ("imagine you're..."), then formal definition, then hands-on example, then edge cases
-- ${isCodingCourse ? "Include 8+ code blocks with REAL, RUNNABLE code. Show input AND output. Explain line-by-line for complex code." : "Include 5+ real-world case studies. Use specific company names, real data scenarios, actual industry examples."}
-- Use analogies and metaphors to explain complex ideas (e.g., "Think of a Docker container like a shipping container...")
-- Include "💡 Pro Tip" callouts for industry wisdom
-- Include "⚠️ Common Mistake" callouts for pitfalls
-- Include "🎯 Key Insight" callouts for aha moments
-- Write like you're TALKING to the student — conversational, engaging, not textbook-dry
-- After each major concept, include a "✅ Check Your Understanding" mini-question
-- NO fluff, NO generic explanations, NO "in this section we will learn..." filler
-- Every paragraph must teach something SPECIFIC and ACTIONABLE
-- A student who reads ONLY this lecture should be able to pass a certification exam on this topic
-
-CONTENT RULES:
-- DO NOT start with "In this lesson..." or "We will cover..." — START with a hook (a problem, a story, a question)
-- DO NOT give dictionary definitions — give INTUITIVE explanations with examples
-- DO NOT repeat the same concept in different words to pad length — add NEW value in every sentence
-- DO use real tool names, real library names, real command-line examples
-- DO include "Before vs After" comparisons when introducing new concepts
-- DO end with a clear bridge to the next lesson
-
-Return JSON: {"theory_content": "the complete markdown lesson (use \\n for newlines)", "description": "3-4 sentence class description that explains the TRANSFORMATION — what the student can DO after this class that they couldn't before"}`;
-
-      const lectureText = await callLLM(
-        "You are a world-class course instructor writing premium lecture content. Write like the best Coursera instructor — deep, practical, engaging. Minimum 2000 words. Every concept needs intuition + example + edge cases. No filler. No generic text. Real code, real scenarios, real value.",
-        [{ role: "user", content: lecturePrompt }],
+      const unitsText = await callLLM(
+        "You are a Coursera-level course platform designer. Generate structured learning units with deep, engaging content. Each unit must be individually completable. Mix video/reading/activity/quiz. Minimum 6 units per class. All content must be real and substantive — no placeholders.",
+        [{ role: "user", content: unitsPrompt }],
         32768
       );
-      const lectureData = safeJSON(lectureText);
+      const unitsData = safeJSON(unitsText);
+
+      // Build theory_content as fallback by concatenating reading/video units
+      let theoryFallback = "";
+      const units = unitsData?.learning_units || [];
+      if (units.length > 0) {
+        theoryFallback = units
+          .filter((u) => u.type === "reading" || u.type === "video")
+          .map((u) => `## ${u.title}\n\n${u.content}`)
+          .join("\n\n---\n\n");
+      }
+
       classContents.push({
         title: classTitle,
-        theory_content: lectureData?.theory_content || "",
-        description: lectureData?.description || `In-depth session covering ${classTitle}.`,
+        description: unitsData?.description || `In-depth session covering ${classTitle}.`,
+        theory_content: theoryFallback,
+        learning_units: units,
       });
-      if (onProgress) onProgress("status", { message: `Writing lecture for Week ${week.number}, Class ${ci + 1}...` });
     }
 
     // ────────────────────────────────────────────────
@@ -465,12 +469,12 @@ Return JSON: {"theory_content": "the complete markdown lesson (use \\n for newli
 ${assignmentGuidance}
 
 For each class, also generate a "resources" array with:
-- 2-3 YouTube video recommendations (real channels: Corey Schafer, Traversy Media, freeCodeCamp, Fireship, Net Ninja, Sentdex, TechWorld with Nana, etc.)
-  Format: {"type":"video","title":"Video title","url":"https://youtube.com/watch?v=...","channel":"Channel Name","description":"What this video covers and why it's useful"}
-- 2-3 blog/article recommendations (real sites: MDN, Real Python, freeCodeCamp, GeeksforGeeks, Medium, dev.to, official docs)
+- 2-3 YouTube video resources. NEVER generate fake YouTube URLs. Instead use this format:
+  {"type":"video","title":"Descriptive video title","video_search_query":"specific YouTube search query 5-10 words","channel":"Recommended Channel Name","description":"What this covers and why it's useful"}
+- 2-3 blog/article recommendations (use REAL well-known sites: MDN, Real Python, freeCodeCamp, GeeksforGeeks, dev.to, official docs)
   Format: {"type":"article","title":"Article title","url":"https://...","source":"Site Name","description":"What this covers"}
 - 1 official documentation link if applicable
-  Format: {"type":"docs","title":"Official Docs - Topic","url":"https://docs...","source":"Official","description":"Reference documentation"}
+  Format: {"type":"docs","title":"Official Docs - Topic","url":"https://docs.python.org/... or similar REAL doc URL","source":"Official","description":"Reference documentation"}
 
 Return JSON: {"classes":[
   {
@@ -506,6 +510,7 @@ Rules:
         title: cls.title || week.classes[ci]?.title || `Class ${ci + 1}`,
         description: classContents[ci]?.description || cls.description || `Learn about ${cls.title || 'this topic'}.`,
         theory_content: classContents[ci]?.theory_content || cls.theory_content || "",
+        learning_units: classContents[ci]?.learning_units || [],
         references: cls.references || cls.resources || [],
         resources: cls.resources || [],
         assignments: (cls.assignments || []).map((a) => {
@@ -550,6 +555,7 @@ Rules:
         title: cls.title || `Class ${ci + 1}`,
         description: classContents[ci]?.description || `Hands-on session covering ${cls.title || 'key concepts'}.`,
         theory_content: classContents[ci]?.theory_content || `# ${cls.title || 'Class ' + (ci + 1)}\n\nThis lesson covers the key concepts of ${cls.title || 'this topic'}.`,
+        learning_units: classContents[ci]?.learning_units || [],
         references: [],
         resources: [],
         assignments: [{
@@ -562,6 +568,53 @@ Rules:
     }
 
     if (onProgress) onProgress("week", outline.weeks[i]);
+  }
+
+  // ────────────────────────────────────────────────
+  // PASS 3: Course Critic AI — evaluate and flag issues
+  // ────────────────────────────────────────────────
+  try {
+    if (onProgress) onProgress("status", { message: "Running course quality review..." });
+
+    const criticSummary = {
+      title: outline.title,
+      weeks: outline.weeks.map((w) => ({
+        number: w.number, title: w.title,
+        classes: (w.classes || []).map((c) => ({
+          title: c.title,
+          units: (c.learning_units || []).length,
+          assignments: (c.assignments || []).length,
+          has_theory: !!(c.theory_content && c.theory_content.length > 100),
+        })),
+      })),
+    };
+
+    const criticText = await callLLM(
+      "You are a course quality reviewer. Evaluate this course structure and return actionable feedback as JSON.",
+      [{ role: "user", content: `Review this course for quality issues:
+
+${JSON.stringify(criticSummary)}
+
+Return JSON:
+{
+  "overall_score": 1-10,
+  "verdict": "one-sentence quality judgment",
+  "issues": ["specific issue 1", "specific issue 2"],
+  "suggestions": ["specific improvement 1", "specific improvement 2"]
+}
+
+Check for: redundant classes, missing content, unbalanced difficulty, classes without learning units, classes without assignments, missing progression, gaps in knowledge flow.` }],
+      2000
+    );
+
+    const criticResult = safeJSON(criticText);
+    if (criticResult) {
+      outline._critic = criticResult;
+      console.log(`Course Critic: ${criticResult.overall_score}/10 — ${criticResult.verdict}`);
+      if (criticResult.issues?.length > 0) console.log("  Issues:", criticResult.issues.join("; "));
+    }
+  } catch (err) {
+    console.log("Critic pass skipped:", err.message?.slice(0, 60));
   }
 
   return outline;

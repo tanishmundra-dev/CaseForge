@@ -34,17 +34,36 @@ interface Course {
   weeks: Week[];
 }
 
+interface ClassProgress {
+  class_id: string;
+  total_units: number;
+  completed_units: number;
+  percent: number;
+}
+
 export default function WeeklyPlanPage() {
   const params = useParams();
   const courseId = params.courseId as string;
   const [course, setCourse] = useState<Course | null>(null);
   const [loading, setLoading] = useState(true);
+  const [progress, setProgress] = useState<Record<string, ClassProgress>>({});
+  const [coursePercent, setCoursePercent] = useState(0);
 
   useEffect(() => {
     fetchAPI(`/trainee/courses/${courseId}`)
       .then(setCourse)
       .catch(() => {})
       .finally(() => setLoading(false));
+
+    // Load course progress
+    fetchAPI(`/trainee/progress/course/${courseId}`)
+      .then((data) => {
+        const map: Record<string, ClassProgress> = {};
+        (data.classes || []).forEach((c: ClassProgress) => { map[c.class_id] = c; });
+        setProgress(map);
+        setCoursePercent(data.percent || 0);
+      })
+      .catch(() => {});
   }, [courseId]);
 
   if (loading) {
@@ -73,6 +92,17 @@ export default function WeeklyPlanPage() {
         <h1 className="display-heading" style={{ fontSize: 40, marginBottom: 16 }}>
           {course.title}
         </h1>
+        {/* Course progress */}
+        {coursePercent > 0 && (
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-heading)" }}>{coursePercent}% complete</span>
+            </div>
+            <div style={{ height: 6, background: "var(--bg-tertiary)", borderRadius: 3, overflow: "hidden" }}>
+              <div style={{ height: "100%", width: `${coursePercent}%`, background: coursePercent === 100 ? "var(--success)" : "var(--accent)", borderRadius: 3, transition: "width 0.3s" }} />
+            </div>
+          </div>
+        )}
         <p
           style={{
             color: "var(--text-secondary)",
@@ -161,8 +191,20 @@ export default function WeeklyPlanPage() {
                   </p>
                 </div>
 
-                {/* Arrow */}
-                <ArrowRight size={18} color="var(--text-tertiary)" />
+                {/* Progress + Arrow */}
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  {progress[cls.id] && progress[cls.id].total_units > 0 && (
+                    <div style={{ textAlign: "right" }}>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: progress[cls.id].percent === 100 ? "var(--success)" : "var(--text-tertiary)", fontFamily: "var(--font-mono)" }}>
+                        {progress[cls.id].percent}%
+                      </span>
+                      <div style={{ width: 48, height: 4, background: "var(--bg-tertiary)", borderRadius: 2, overflow: "hidden", marginTop: 3 }}>
+                        <div style={{ height: "100%", width: `${progress[cls.id].percent}%`, background: progress[cls.id].percent === 100 ? "var(--success)" : "var(--accent)", borderRadius: 2 }} />
+                      </div>
+                    </div>
+                  )}
+                  <ArrowRight size={18} color="var(--text-tertiary)" />
+                </div>
               </Link>
             ))}
           </div>

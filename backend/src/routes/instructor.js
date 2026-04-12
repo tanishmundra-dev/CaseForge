@@ -106,33 +106,31 @@ async function saveCourseToDb(courseData, status) {
       const classId = `c-${uuidv4().slice(0, 6)}`;
       // Try with resource_links + theory_content, fall back gracefully
       let classInserted = false;
-      // Merge references + resources into one resource_links array
       const allResources = [...(cls.references || []), ...(cls.resources || [])];
-      const { error: clErr1 } = await supabase.from("classes").insert({
+      const classPayload = {
         id: classId, number: cls.number, title: cls.title,
-        description: cls.description || "", resource_links: allResources,
+        description: cls.description || "",
+        resource_links: allResources,
         theory_content: cls.theory_content || "",
+        learning_units: cls.learning_units || [],
         week_id: weekId,
-      });
-      if (clErr1) {
-        // Retry without resource_links column
-        const { error: clErr2 } = await supabase.from("classes").insert({
-          id: classId, number: cls.number, title: cls.title,
-          description: cls.description || "", theory_content: cls.theory_content || "",
-          week_id: weekId,
-        });
-        if (clErr2) {
-          // Retry without theory_content too (column may not exist yet)
-          const { error: clErr3 } = await supabase.from("classes").insert({
-            id: classId, number: cls.number, title: cls.title,
-            description: cls.description || "", week_id: weekId,
-          });
-          if (clErr3) { console.error(`  Class ${cls.number} insert failed:`, clErr3.message); continue; }
-        }
-        classInserted = true;
-      } else {
-        classInserted = true;
+      };
+      // Try full insert, progressively remove columns if they don't exist
+      let { error: clErr } = await supabase.from("classes").insert(classPayload);
+      if (clErr && clErr.message.includes("learning_units")) {
+        delete classPayload.learning_units;
+        ({ error: clErr } = await supabase.from("classes").insert(classPayload));
       }
+      if (clErr && clErr.message.includes("theory_content")) {
+        delete classPayload.theory_content;
+        ({ error: clErr } = await supabase.from("classes").insert(classPayload));
+      }
+      if (clErr && clErr.message.includes("resource_links")) {
+        delete classPayload.resource_links;
+        ({ error: clErr } = await supabase.from("classes").insert(classPayload));
+      }
+      if (clErr) { console.error(`  Class ${cls.number} insert failed:`, clErr.message); continue; }
+      classInserted = true;
 
       if (!classInserted) continue;
       console.log(`    Class ${cls.number}: "${cls.title}" | ${cls.assignments?.length} assignments`);

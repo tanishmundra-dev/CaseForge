@@ -29,8 +29,19 @@ async function migrate() {
         number INTEGER NOT NULL,
         title TEXT NOT NULL,
         description TEXT NOT NULL,
+        theory_content TEXT DEFAULT '',
+        learning_units JSONB DEFAULT '[]',
+        resource_links JSONB DEFAULT '[]',
         week_id TEXT REFERENCES weeks(id) ON DELETE CASCADE
       );
+
+      -- Add columns if table already exists
+      DO $$ BEGIN
+        ALTER TABLE classes ADD COLUMN IF NOT EXISTS theory_content TEXT DEFAULT '';
+        ALTER TABLE classes ADD COLUMN IF NOT EXISTS learning_units JSONB DEFAULT '[]';
+        ALTER TABLE classes ADD COLUMN IF NOT EXISTS resource_links JSONB DEFAULT '[]';
+      EXCEPTION WHEN others THEN NULL;
+      END $$;
 
       -- Assignments
       CREATE TABLE IF NOT EXISTS assignments (
@@ -64,6 +75,18 @@ async function migrate() {
         strengths JSONB DEFAULT '[]',
         improvements JSONB DEFAULT '[]',
         submitted_at TIMESTAMPTZ DEFAULT now()
+      );
+
+      -- Student Progress (per-unit completion tracking)
+      CREATE TABLE IF NOT EXISTS student_progress (
+        id TEXT PRIMARY KEY,
+        student_id TEXT NOT NULL,
+        course_id TEXT NOT NULL,
+        class_id TEXT NOT NULL,
+        unit_index INTEGER NOT NULL,
+        completed BOOLEAN DEFAULT false,
+        completed_at TIMESTAMPTZ,
+        UNIQUE(student_id, class_id, unit_index)
       );
 
       -- Add student_id column if table already exists without it

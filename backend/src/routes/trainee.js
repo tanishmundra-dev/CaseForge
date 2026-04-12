@@ -169,6 +169,8 @@ router.get("/courses/:courseId/classes/:classId", async (req, res) => {
     title: cls.title,
     description: cls.description,
     theory_content: cls.theory_content || "",
+    learning_units: cls.learning_units || [],
+    resource_links: cls.resource_links || [],
     assignments: cleanAssignments,
   });
 });
@@ -451,6 +453,121 @@ router.get("/submissions", async (req, res) => {
   );
 
   res.json(mine);
+});
+
+// ═══════════════════════════════════════════════════════════
+// UNIT COMPLETION TRACKING
+// ═══════════════════════════════════════════════════════════
+
+// Get progress for a class (which units are completed)
+router.get("/progress/class/:classId", async (req, res) => {
+  const studentId = req.user?.id;
+  if (!studentId) return res.json([]);
+
+  const { data, error } = await supabase
+    .from("student_progress")
+    .select("unit_index, completed, completed_at")
+    .eq("student_id", studentId)
+    .eq("class_id", req.params.classId);
+
+  if (error && error.message.includes("student_progress")) {
+    return res.json([]); // Table doesn't exist yet
+  }
+  res.json(data || []);
+});
+
+// Toggle unit completion
+router.post("/progress/toggle", async (req, res) => {
+  const studentId = req.user?.id;
+  if (!studentId) return res.status(401).json({ error: "Login required" });
+
+  const { course_id, class_id, unit_index } = req.body;
+  if (!class_id || unit_index === undefined) return res.status(400).json({ error: "class_id and unit_index required" });
+
+  try {
+    // Check if record exists
+    const { data: existing } = await supabase
+      .from("student_progress")
+      .select("id, completed")
+      .eq("student_id", studentId)
+      .eq("class_id", class_id)
+      .eq("unit_index", unit_index)
+      .maybeSingle();
+
+    if (existing) {
+      // Toggle
+      const newVal = !existing.completed;
+      await supabase.from("student_progress").update({
+        completed: newVal,
+        completed_at: newVal ? new Date().toISOString() : null,
+      }).eq("id", existing.id);
+      return res.json({ completed: newVal });
+    }
+
+    // Create new — mark as completed
+    const id = `sp-${uuidv4().slice(0, 8)}`;
+    const { error } = await supabase.from("student_progress").insert({
+      id,
+      student_id: studentId,
+      course_id: course_id || "",
+      class_id,
+      unit_index,
+      completed: true,
+      completed_at: new Date().toISOString(),
+    });
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ completed: true });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Get overall course progress (all classes)
+router.get("/progress/course/:courseId", async (req, res) => {
+  const studentId = req.user?.id;
+  if (!studentId) return res.json({ classes: [] });
+
+  // Get all classes in the course
+  const { data: weeks } = await supabase.from("weeks").select("id").eq("course_id", req.params.courseId);
+  if (!weeks || weeks.length === 0) return res.json({ classes: [] });
+
+  const { data: classes } = await supabase.from("classes").select("id, number, title, learning_units").in("week_id", weeks.map((w) => w.id));
+
+  // Get all progress for this student in these classes
+  const classIds = (classes || []).map((c) => c.id);
+  let progressData = [];
+  if (classIds.length > 0) {
+    const { data } = await supabase
+      .from("student_progress")
+      .select("class_id, unit_index, completed")
+      .eq("student_id", studentId)
+      .in("class_id", classIds);
+    progressData = data || [];
+  }
+
+  // Calculate per-class progress
+  const classProgress = (classes || []).map((cls) => {
+    const totalUnits = (cls.learning_units || []).length;
+    const completedUnits = progressData.filter((p) => p.class_id === cls.id && p.completed).length;
+    return {
+      class_id: cls.id,
+      number: cls.number,
+      title: cls.title,
+      total_units: totalUnits,
+      completed_units: completedUnits,
+      percent: totalUnits > 0 ? Math.round((completedUnits / totalUnits) * 100) : 0,
+    };
+  });
+
+  const totalUnits = classProgress.reduce((s, c) => s + c.total_units, 0);
+  const totalCompleted = classProgress.reduce((s, c) => s + c.completed_units, 0);
+
+  res.json({
+    classes: classProgress,
+    total_units: totalUnits,
+    completed_units: totalCompleted,
+    percent: totalUnits > 0 ? Math.round((totalCompleted / totalUnits) * 100) : 0,
+  });
 });
 
 module.exports = router;
