@@ -1,6 +1,0 @@
-__pycache__/
-*.pyc
-.mcp.json
-node_modules/
-.next/
-.env*
