@@ -396,7 +396,7 @@ function MissionControlInner() {
                   break;
                 }
                 case "week_content": {
-                  // Pass 2: replace week skeleton with full content
+                  // Legacy: replace week skeleton with full content (single payload)
                   const wi = weeks.findIndex((w) => w.number === d.number);
                   if (wi >= 0) {
                     weeks[wi] = d;
@@ -404,6 +404,28 @@ function MissionControlInner() {
                     setExpandedWeeks((p) => new Set([...p, d.number]));
                     for (const cl of d.classes || []) setExpandedClasses((p) => new Set([...p, `${d.number}-${cl.number}`]));
                   }
+                  break;
+                }
+                case "week_content_class": {
+                  // Pass 2: receive one class at a time (avoids large payload drops)
+                  const wcWi = weeks.findIndex((w) => w.number === d.week);
+                  if (wcWi >= 0 && d.classData) {
+                    const classNum = d.classData.number;
+                    const existingCi = weeks[wcWi].classes.findIndex((c) => c.number === classNum);
+                    if (existingCi >= 0) {
+                      weeks[wcWi].classes[existingCi] = d.classData;
+                    } else {
+                      weeks[wcWi].classes.push(d.classData);
+                    }
+                    setCourse((p) => p ? { ...p, weeks: [...weeks] } : null);
+                    setExpandedWeeks((p) => new Set([...p, d.week]));
+                    setExpandedClasses((p) => new Set([...p, `${d.week}-${classNum}`]));
+                  }
+                  break;
+                }
+                case "week_content_done": {
+                  // Signal that all classes for this week have been sent
+                  setExpandedWeeks((p) => new Set([...p, d.number]));
                   break;
                 }
                 case "done":

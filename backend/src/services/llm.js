@@ -11,7 +11,7 @@ const MODELS = [
   "gemini-2.0-flash",
 ];
 
-async function callLLM(systemPrompt, userMessages, maxTokens = 4000) {
+async function callLLM(systemPrompt, userMessages, maxTokens = 8000) {
   let lastError = null;
 
   for (const modelName of MODELS) {
@@ -153,7 +153,7 @@ Analyze the document and use it as the basis for generating the course. Extract:
 - Natural week/class breakdown based on document sections
 
 DOCUMENT CONTENT:
-${fileContent.slice(0, 12000)}`;
+${fileContent.slice(0, 20000)}`;
   }
 
   if (currentCourse) {
@@ -169,7 +169,7 @@ ${fileContent.slice(0, 12000)}`;
       content: m.role === "assistant" ? m.content.slice(0, 200) : m.content,
     }));
 
-  const tokenLimit = currentCourse || fileContent ? 8000 : 3000;
+  const tokenLimit = currentCourse || fileContent ? 16000 : 4000;
   const text = await callLLM(systemPrompt, recent, tokenLimit);
   const parsed = safeJSON(text);
   if (parsed?.action) return parsed;
@@ -179,10 +179,12 @@ ${fileContent.slice(0, 12000)}`;
 
 function compactCourse(c) {
   if (!c?.weeks) return JSON.stringify(c).slice(0, 500);
-  return JSON.stringify({
+  const compact = JSON.stringify({
     title: c.title, difficulty: c.difficulty,
+    total_weeks: c.weeks.length,
     weeks: c.weeks.map((w) => ({
       number: w.number, title: w.title,
+      total_classes: (w.classes || []).length,
       classes: (w.classes || []).map((cl) => ({
         number: cl.number, title: cl.title,
         assignments: (cl.assignments || []).map((a, i) => {
@@ -195,6 +197,9 @@ function compactCourse(c) {
       })),
     })),
   });
+  // Safety cap to avoid bloating the system prompt for large courses
+  if (compact.length > 8000) return compact.slice(0, 8000) + '..."}}';
+  return compact;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -255,8 +260,8 @@ console.log("Result:", output);
 async function generate(context, onProgress) {
   // PASS 1: Generate course outline
   // Truncate topic if it came from a document (can be very long)
-  const topicText = (context.topic || "").length > 500
-    ? (context.topic || "").slice(0, 500) + "..."
+  const topicText = (context.topic || "").length > 1500
+    ? (context.topic || "").slice(0, 1500) + "..."
     : (context.topic || "General course");
 
   const numWeeks = parseWeekCount(context.timeline);
@@ -272,11 +277,11 @@ Duration: ${context.timeline || numWeeks + " weeks"}
 ${extraNotes}
 
 You MUST return ONLY a JSON object with this EXACT structure:
-{"title":"Course Title","description":"Course description","difficulty":"Beginner","weeks":[{"number":1,"title":"Week Title","classes":[{"number":1,"title":"Class Title"},{"number":2,"title":"Class Title"}]}]}
+{"title":"Course Title","description":"Course description","difficulty":"Beginner","weeks":[{"number":1,"title":"Week Title","classes":[{"number":1,"title":"Class Title"},{"number":2,"title":"Class Title"},{"number":3,"title":"Class Title"}]}]}
 
 Rules:
 - EXACTLY ${numWeeks} weeks
-- EXACTLY 2 classes per week
+- 2 to 5 classes per week depending on how much content that week needs
 - The root object MUST have "title", "description", "difficulty", and "weeks" keys
 - Each week MUST have "number", "title", and "classes" keys
 - Make titles specific and descriptive
@@ -285,11 +290,11 @@ Rules:
   let outline = null;
 
   // Try up to 2 times for outline generation
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     const outlineText = await callLLM(
       "You are a JSON generator. Return ONLY a valid JSON object with title, description, difficulty, and weeks array. No markdown, no explanation, just the JSON object.",
       [{ role: "user", content: outlinePrompt }],
-      2000
+      16000
     );
 
     const parsed = safeJSON(outlineText);
@@ -323,20 +328,18 @@ Rules:
 
   if (onProgress) onProgress("outline", outline);
 
-  // PASS 2: Fill content for each week
-  for (let i = 0; i < outline.weeks.length; i++) {
-    const week = outline.weeks[i];
-    const isCodingCourse = /programming|coding|software|developer|python|javascript|typescript|java|c\+\+|rust|go|ruby|php|swift|kotlin|react|angular|vue|node|docker|kubernetes|devops|api|backend|frontend|fullstack|full.stack|web.dev|data.struct|algorithm|machine.learn|deep.learn|ml|ai|database|sql|git|linux|bash|shell|cloud|aws|azure|gcp|html|css|flask|django|express|spring/i.test(context.topic || outline.title || "");
+  // PASS 2: Fill content for each week (parallelized within each week)
+  const isCodingCourse = /programming|coding|software|developer|python|javascript|typescript|java|c\+\+|rust|go|ruby|php|swift|kotlin|react|angular|vue|node|docker|kubernetes|devops|api|backend|frontend|fullstack|full.stack|web.dev|data.struct|algorithm|machine.learn|deep.learn|ml|ai|database|sql|git|linux|bash|shell|cloud|aws|azure|gcp|html|css|flask|django|express|spring/i.test(context.topic || outline.title || "");
 
-    const codingExample = `{"title":"Coding Exercise","description":"What to build - 3+ sentences","type":"coding","difficulty":"...","starter_code":"# Real working starter code with TODOs for student to fill in\\ndef solve(n):\\n    # TODO: implement the solution\\n    pass\\n\\nif __name__ == '__main__':\\n    print(solve(5))","solution_code":"# COMPLETE working solution that passes ALL test cases\\ndef solve(n):\\n    if n <= 0: return 0\\n    if n == 1: return 1\\n    a, b = 0, 1\\n    for _ in range(2, n+1):\\n        a, b = b, a+b\\n    return b\\n\\nif __name__ == '__main__':\\n    print(solve(5))","test_cases":[{"input":"5","expected_output":"5","description":"fibonacci of 5"},{"input":"0","expected_output":"0","description":"edge case zero"},{"input":"10","expected_output":"55","description":"fibonacci of 10"}],"rubric":[{"criterion":"Correctness","excellent":"All test cases pass","acceptable":"Most test cases pass","poor":"Fails basic cases","weight":50},{"criterion":"Code Quality","excellent":"Clean, efficient, well-structured","acceptable":"Works but could be cleaner","poor":"Messy or inefficient","weight":50}],"hints":["concrete hint"],"pitfalls":["common mistake"],"aha_moment":"key insight"}`;
+  const codingExample = `{"title":"Coding Exercise","description":"What to build - 3+ sentences","type":"coding","difficulty":"...","starter_code":"# Real working starter code with TODOs for student to fill in\\ndef solve(n):\\n    # TODO: implement the solution\\n    pass\\n\\nif __name__ == '__main__':\\n    print(solve(5))","solution_code":"# COMPLETE working solution that passes ALL test cases\\ndef solve(n):\\n    if n <= 0: return 0\\n    if n == 1: return 1\\n    a, b = 0, 1\\n    for _ in range(2, n+1):\\n        a, b = b, a+b\\n    return b\\n\\nif __name__ == '__main__':\\n    print(solve(5))","test_cases":[{"input":"5","expected_output":"5","description":"fibonacci of 5"},{"input":"0","expected_output":"0","description":"edge case zero"},{"input":"10","expected_output":"55","description":"fibonacci of 10"}],"rubric":[{"criterion":"Correctness","excellent":"All test cases pass","acceptable":"Most test cases pass","poor":"Fails basic cases","weight":50},{"criterion":"Code Quality","excellent":"Clean, efficient, well-structured","acceptable":"Works but could be cleaner","poor":"Messy or inefficient","weight":50}],"hints":["concrete hint"],"pitfalls":["common mistake"],"aha_moment":"key insight"}`;
 
-    const quizExample = `{"title":"Quiz","description":"Test understanding - 3+ sentences","type":"objective","difficulty":"...","questions":[{"type":"mcq","question":"Q?","options":["A","B","C","D"],"correct":0,"explanation":"Why"},{"type":"mcq","question":"Q2?","options":["A","B","C","D"],"correct":1,"explanation":"Why"},{"type":"mcq","question":"Q3?","options":["A","B","C","D"],"correct":2,"explanation":"Why"},{"type":"mcq","question":"Q4?","options":["A","B","C","D"],"correct":0,"explanation":"Why"},{"type":"fill_up","question":"The ___ is...","answer":"ans","explanation":"Why"}]}`;
+  const quizExample = `{"title":"Quiz","description":"Test understanding - 3+ sentences","type":"objective","difficulty":"...","questions":[{"type":"mcq","question":"Q?","options":["A","B","C","D"],"correct":0,"explanation":"Why"},{"type":"mcq","question":"Q2?","options":["A","B","C","D"],"correct":1,"explanation":"Why"},{"type":"mcq","question":"Q3?","options":["A","B","C","D"],"correct":2,"explanation":"Why"},{"type":"mcq","question":"Q4?","options":["A","B","C","D"],"correct":0,"explanation":"Why"},{"type":"fill_up","question":"The ___ is...","answer":"ans","explanation":"Why"}]}`;
 
-    const ideExample = `{"title":"Project","description":"Build something - 3+ sentences","type":"ide","difficulty":"...","files":[{"name":"index.html","content":"<!DOCTYPE html>...","language":"html"},{"name":"app.js","content":"// real code","language":"javascript"}],"test_cases":[],"rubric":[{"criterion":"Functionality","excellent":"...","acceptable":"...","poor":"...","weight":50}],"hints":["hint"],"pitfalls":["pitfall"],"aha_moment":"insight"}`;
+  const ideExample = `{"title":"Project","description":"Build something - 3+ sentences","type":"ide","difficulty":"...","files":[{"name":"index.html","content":"<!DOCTYPE html>...","language":"html"},{"name":"app.js","content":"// real code","language":"javascript"}],"test_cases":[],"rubric":[{"criterion":"Functionality","excellent":"...","acceptable":"...","poor":"...","weight":50}],"hints":["hint"],"pitfalls":["pitfall"],"aha_moment":"insight"}`;
 
-    let assignmentGuidance;
-    if (isCodingCourse) {
-      assignmentGuidance = `This is a CODING/SOFTWARE course. Each class MUST have:
+  let assignmentGuidance;
+  if (isCodingCourse) {
+    assignmentGuidance = `This is a CODING/SOFTWARE course. Each class MUST have:
 - At least 1 "coding" assignment with REAL starter_code that students can edit and run, with test_cases to validate their solution
 - Optionally 1 "objective" quiz for conceptual understanding
 - Optionally 1 "ide" project for multi-file exercises
@@ -344,28 +347,21 @@ Rules:
 
 Example assignments for Class 1: [${codingExample}, ${quizExample}]
 Example assignments for Class 2: [${codingExample}, ${ideExample}]`;
-    } else {
-      assignmentGuidance = `This is a NON-CODING course. Each class should have:
+  } else {
+    assignmentGuidance = `This is a NON-CODING course. Each class should have:
 - 1-2 "objective" assignments with 5+ real questions each (MCQ + fill-up)
 - Do NOT include "coding" or "ide" assignments — they don't apply to this topic
 
 Example assignments: [${quizExample}]`;
-    }
+  }
 
-    // ────────────────────────────────────────────────
-    // PASS 2A: Generate structured LEARNING UNITS per class (Coursera-style)
-    // ────────────────────────────────────────────────
-    const classContents = [];
-    for (let ci = 0; ci < (week.classes || []).length; ci++) {
-      const classTitle = week.classes[ci]?.title || `Class ${ci + 1}`;
-      const phase = week.number <= Math.ceil(numWeeks / 3) ? "FOUNDATIONS" : week.number <= Math.ceil(numWeeks * 2 / 3) ? "INTERMEDIATE" : "ADVANCED";
-
-      if (onProgress) onProgress("status", { message: `Designing learning units for Week ${week.number}, Class ${ci + 1}...` });
-
-      const unitsPrompt = `You are a Course Platform Designer who designs courses like Coursera/Udemy. You structure content into individually completable Learning Units that mix passive learning (video/reading) with active practice (activity/quiz).
+  // Helper: generate learning units for a single class
+  function buildUnitsPrompt(weekNum, weekTitle, classNum, classTitle) {
+    const phase = weekNum <= Math.ceil(numWeeks / 3) ? "FOUNDATIONS" : weekNum <= Math.ceil(numWeeks * 2 / 3) ? "INTERMEDIATE" : "ADVANCED";
+    return `You are a Course Platform Designer who designs courses like Coursera/Udemy. You structure content into individually completable Learning Units that mix passive learning (video/reading) with active practice (activity/quiz).
 
 Course: "${outline.title}" | Audience: ${context.audience} | Level: ${outline.difficulty || "Intermediate"}
-Week ${week.number}/${numWeeks}: "${week.title}" > Class ${ci + 1}: "${classTitle}"
+Week ${weekNum}/${numWeeks}: "${weekTitle}" > Class ${classNum}: "${classTitle}"
 Phase: ${phase} — ${phase === "FOUNDATIONS" ? "Build intuition from zero. Assume no prior knowledge of this topic." : phase === "INTERMEDIATE" ? "Apply to real-world scenarios. Introduce complexity and trade-offs." : "Production-grade thinking. Optimization, architecture, interview prep."}
 
 Design this class as a sequence of 6-10 Learning Units. Each unit is individually completable (like Coursera modules).
@@ -435,36 +431,11 @@ Return JSON:
     }
   ]
 }`;
+  }
 
-      const unitsText = await callLLM(
-        "You are a Coursera-level course platform designer. Generate structured learning units with deep, engaging content. Each unit must be individually completable. Mix video/reading/activity/quiz. Minimum 6 units per class. All content must be real and substantive — no placeholders.",
-        [{ role: "user", content: unitsPrompt }],
-        32768
-      );
-      const unitsData = safeJSON(unitsText);
-
-      // Build theory_content as fallback by concatenating reading/video units
-      let theoryFallback = "";
-      const units = unitsData?.learning_units || [];
-      if (units.length > 0) {
-        theoryFallback = units
-          .filter((u) => u.type === "reading" || u.type === "video")
-          .map((u) => `## ${u.title}\n\n${u.content}`)
-          .join("\n\n---\n\n");
-      }
-
-      classContents.push({
-        title: classTitle,
-        description: unitsData?.description || `In-depth session covering ${classTitle}.`,
-        theory_content: theoryFallback,
-        learning_units: units,
-      });
-    }
-
-    // ────────────────────────────────────────────────
-    // PASS 2B: Generate assignments + resources per week
-    // ────────────────────────────────────────────────
-    const weekPrompt = `Generate assignments and learning resources for Week ${week.number}: "${week.title}" of "${outline.title}" for ${context.audience}.
+  // Helper: generate assignments prompt for a week
+  function buildWeekPrompt(week) {
+    return `Generate assignments and learning resources for Week ${week.number}: "${week.title}" of "${outline.title}" for ${context.audience}.
 
 ${assignmentGuidance}
 
@@ -476,17 +447,10 @@ For each class, also generate a "resources" array with:
 - 1 official documentation link if applicable
   Format: {"type":"docs","title":"Official Docs - Topic","url":"https://docs.python.org/... or similar REAL doc URL","source":"Official","description":"Reference documentation"}
 
+This week has ${week.classes.length} classes: ${week.classes.map((c, i) => `Class ${i + 1}: "${c.title}"`).join(", ")}
+
 Return JSON: {"classes":[
-  {
-    "number":1,"title":"${week.classes[0]?.title || 'Class 1'}",
-    "resources":[... video, article, docs objects ...],
-    "assignments":[... see assignment examples above ...]
-  },
-  {
-    "number":2,"title":"${week.classes[1]?.title || 'Class 2'}",
-    "resources":[... video, article, docs objects ...],
-    "assignments":[... see assignment examples above ...]
-  }
+${week.classes.map((c, i) => `  {"number":${i + 1},"title":"${c.title || `Class ${i + 1}`}","resources":[... video, article, docs objects ...],"assignments":[... see assignment examples above ...]}`).join(",\n")}
 ]}
 
 Rules:
@@ -496,14 +460,115 @@ Rules:
 - YouTube URLs should point to real channels known for this topic
 - Make content progressively harder (week ${week.number} of ${numWeeks})
 - EVERY field must have real content`;
+  }
 
-    const weekText = await callLLM(
+  // Helper: post-process assignments
+  function postProcessAssignments(assignments) {
+    return (assignments || []).map((a) => {
+      const type = a.type || "coding";
+      const asn = {
+        title: a.title || "Exercise",
+        description: a.description || "Practice exercise",
+        type,
+        difficulty: a.difficulty || "Intermediate",
+        starter_code: a.starter_code || "",
+        solution_code: a.solution_code || "",
+        test_cases: a.test_cases || [],
+        rubric: a.rubric || [],
+        hints: a.hints || [],
+        pitfalls: a.pitfalls || [],
+        aha_moment: a.aha_moment || "",
+        questions: a.questions || [],
+        files: a.files || [],
+      };
+      if (type === "coding" && !asn.starter_code.trim()) {
+        asn.starter_code = generateFallbackStarterCode(asn.title, outline.title);
+      }
+      if (type === "coding" && asn.test_cases.length === 0) {
+        asn.test_cases = [
+          { input: "", expected_output: "Output:", description: "Should produce output" },
+        ];
+      }
+      if (type === "objective" && asn.questions.length === 0) {
+        asn.type = "coding";
+        asn.starter_code = generateFallbackStarterCode(asn.title, outline.title);
+      }
+      return asn;
+    });
+  }
+
+  // Helper: call LLM for a single class's learning units, with 1 retry on failure
+  async function generateClassUnits(weekNum, weekTitle, ci, classTitle) {
+    const prompt = buildUnitsPrompt(weekNum, weekTitle, ci + 1, classTitle);
+    const systemMsg = "You are a Coursera-level course platform designer. Generate structured learning units with deep, engaging content. Each unit must be individually completable. Mix video/reading/activity/quiz. Minimum 6 units per class. All content must be real and substantive — no placeholders.";
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const text = await callLLM(systemMsg, [{ role: "user", content: prompt }], 65536);
+        const data = safeJSON(text);
+        const units = data?.learning_units || [];
+        if (units.length > 0) {
+          const theoryFallback = units
+            .filter((u) => u.type === "reading" || u.type === "video")
+            .map((u) => `## ${u.title}\n\n${u.content}`)
+            .join("\n\n---\n\n");
+          return { title: classTitle, description: data?.description || `In-depth session covering ${classTitle}.`, theory_content: theoryFallback, learning_units: units };
+        }
+        console.log(`Units empty for Week ${weekNum} Class ${ci + 1}, attempt ${attempt + 1}`);
+      } catch (err) {
+        console.log(`Units failed for Week ${weekNum} Class ${ci + 1}, attempt ${attempt + 1}:`, err.message?.slice(0, 80));
+      }
+      // Brief pause before retry to ease rate limits
+      if (attempt === 0) await new Promise((r) => setTimeout(r, 2000));
+    }
+    return { title: classTitle, description: `In-depth session covering ${classTitle}.`, theory_content: "", learning_units: [] };
+  }
+
+  // Helper: run promises in batches of `size` to avoid rate limits
+  async function runInBatches(tasks, size) {
+    const results = [];
+    for (let i = 0; i < tasks.length; i += size) {
+      const batch = tasks.slice(i, i + size);
+      const batchResults = await Promise.all(batch.map((fn) => fn()));
+      results.push(...batchResults);
+    }
+    return results;
+  }
+
+  for (let i = 0; i < outline.weeks.length; i++) {
+    const week = outline.weeks[i];
+
+    if (onProgress) onProgress("status", { message: `Generating Week ${week.number}/${outline.weeks.length}: "${week.title}" (${week.classes.length} classes)...` });
+
+    // ────────────────────────────────────────────────
+    // Run Pass 2A (classes in batches of 2) + Pass 2B (assignments) IN PARALLEL
+    // ────────────────────────────────────────────────
+
+    // Pass 2A: class units in batches of 2 to avoid rate limits
+    const classUnitTasks = (week.classes || []).map((cls, ci) => {
+      const classTitle = cls?.title || `Class ${ci + 1}`;
+      return () => generateClassUnits(week.number, week.title, ci, classTitle);
+    });
+
+    // Pass 2B: assignments for the whole week (runs concurrently with 2A batches)
+    const assignmentPromise = callLLM(
       "Generate course assignments and curated learning resources as JSON. Use real YouTube channels and blog URLs.",
-      [{ role: "user", content: weekPrompt }],
-      12288
-    );
+      [{ role: "user", content: buildWeekPrompt(week) }],
+      49152
+    ).then((text) => safeJSON(text)).catch((err) => {
+      console.log(`Assignments failed for Week ${week.number}:`, err.message?.slice(0, 80));
+      return null;
+    });
 
-    const weekData = safeJSON(weekText);
+    // Run class batches and assignments concurrently
+    const [classContents, weekData] = await Promise.all([
+      runInBatches(classUnitTasks, 2),
+      assignmentPromise,
+    ]);
+
+    // ────────────────────────────────────────────────
+    // Merge results
+    // ────────────────────────────────────────────────
     if (weekData?.classes) {
       outline.weeks[i].classes = weekData.classes.map((cls, ci) => ({
         number: ci + 1,
@@ -513,41 +578,7 @@ Rules:
         learning_units: classContents[ci]?.learning_units || [],
         references: cls.references || cls.resources || [],
         resources: cls.resources || [],
-        assignments: (cls.assignments || []).map((a) => {
-          const type = a.type || "coding";
-          const asn = {
-            title: a.title || "Exercise",
-            description: a.description || "Practice exercise",
-            type,
-            difficulty: a.difficulty || "Intermediate",
-            starter_code: a.starter_code || "",
-            solution_code: a.solution_code || "",
-            test_cases: a.test_cases || [],
-            rubric: a.rubric || [],
-            hints: a.hints || [],
-            pitfalls: a.pitfalls || [],
-            aha_moment: a.aha_moment || "",
-            questions: a.questions || [],
-            files: a.files || [],
-          };
-
-          // Post-processing: ensure coding assignments have starter_code
-          if (type === "coding" && !asn.starter_code.trim()) {
-            asn.starter_code = generateFallbackStarterCode(asn.title, outline.title);
-          }
-          // Ensure coding assignments have at least 1 test case
-          if (type === "coding" && asn.test_cases.length === 0) {
-            asn.test_cases = [
-              { input: "", expected_output: "Output:", description: "Should produce output" },
-            ];
-          }
-          // Ensure objective assignments have questions
-          if (type === "objective" && asn.questions.length === 0) {
-            asn.type = "coding"; // Demote empty quizzes to coding
-            asn.starter_code = generateFallbackStarterCode(asn.title, outline.title);
-          }
-          return asn;
-        }),
+        assignments: postProcessAssignments(cls.assignments),
       }));
     } else {
       outline.weeks[i].classes = (week.classes || []).map((cls, ci) => ({
@@ -604,7 +635,7 @@ Return JSON:
 }
 
 Check for: redundant classes, missing content, unbalanced difficulty, classes without learning units, classes without assignments, missing progression, gaps in knowledge flow.` }],
-      2000
+      4000
     );
 
     const criticResult = safeJSON(criticText);
@@ -622,7 +653,7 @@ Check for: redundant classes, missing content, unbalanced difficulty, classes wi
 
 function parseWeekCount(timeline) {
   const m = (timeline || "4 weeks").match(/(\d+)/);
-  return Math.max(1, Math.min(parseInt(m?.[1] || "4"), 12));
+  return Math.max(1, Math.min(parseInt(m?.[1] || "4"), 20));
 }
 
 module.exports = { chat, generate };

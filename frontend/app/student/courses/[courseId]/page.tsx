@@ -117,27 +117,32 @@ export default function WeeklyPlanPage() {
       </div>
 
       {/* Weekly plan */}
-      {course.weeks.map((week, wi) => (
-        <div key={week.id} className={`animate-in animate-in-${wi + 2}`} style={{ marginBottom: 40 }}>
-          {/* Week overline */}
-          <span
-            style={{
-              fontFamily: "var(--font-mono)",
-              fontSize: 13,
-              fontWeight: 500,
-              textTransform: "uppercase",
-              letterSpacing: "0.08em",
-              color: "var(--text-tertiary)",
-              display: "block",
-              marginBottom: 16,
-            }}
-          >
-            WEEK {week.number}
-          </span>
+      {(() => {
+        let cumulativeClass = 0;
+        return course.weeks.map((week, wi) => (
+          <div key={week.id} className={`animate-in animate-in-${wi + 2}`} style={{ marginBottom: 40 }}>
+            {/* Week overline */}
+            <span
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: 13,
+                fontWeight: 500,
+                textTransform: "uppercase",
+                letterSpacing: "0.08em",
+                color: "var(--text-tertiary)",
+                display: "block",
+                marginBottom: 16,
+              }}
+            >
+              WEEK {week.number}
+            </span>
 
-          {/* Classes in this week */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {week.classes.map((cls) => (
+            {/* Classes in this week */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {week.classes.map((cls) => {
+                cumulativeClass++;
+                const displayNumber = cumulativeClass;
+                return (
               <Link
                 key={cls.id}
                 href={`/student/courses/${courseId}/classes/${cls.id}`}
@@ -163,7 +168,7 @@ export default function WeeklyPlanPage() {
                     lineHeight: 1,
                   }}
                 >
-                  {cls.number}
+                  {displayNumber}
                 </span>
 
                 {/* Title + description */}
@@ -206,10 +211,12 @@ export default function WeeklyPlanPage() {
                   <ArrowRight size={18} color="var(--text-tertiary)" />
                 </div>
               </Link>
-            ))}
+                );
+              })}
+            </div>
           </div>
-        </div>
-      ))}
+        ));
+      })()}
     </div>
   );
 }

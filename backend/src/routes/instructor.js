@@ -409,8 +409,14 @@ router.post("/mission-control/generate-stream", async (req, res) => {
           }
         }
       } else if (type === "week") {
-        // Pass 2 — each week filled with content
-        send("week_content", { number: data.number, title: data.title, classes: data.classes });
+        // Pass 2 — send each class individually to avoid large SSE payloads being dropped
+        for (const cls of data.classes || []) {
+          send("week_content_class", { week: data.number, weekTitle: data.title, classData: cls });
+        }
+        // Signal this week is fully sent
+        send("week_content_done", { number: data.number, title: data.title });
+      } else if (type === "status") {
+        send("status", data);
       }
     });
 
