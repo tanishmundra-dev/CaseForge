@@ -42,6 +42,15 @@ interface Assignment {
   difficulty: string;
 }
 
+interface Resource {
+  type?: string;
+  title: string;
+  url: string;
+  description?: string;
+  channel?: string;
+  source?: string;
+}
+
 interface ClassDetail {
   course_id: string;
   course_title: string;
@@ -52,6 +61,7 @@ interface ClassDetail {
   title: string;
   description: string;
   theory_content?: string;
+  resource_links?: Resource[];
   assignments: Assignment[];
 }
 
@@ -160,6 +170,41 @@ export default function ClassDetailPage() {
               />
             </div>
           )}
+        </div>
+      )}
+
+      {/* Resources — Videos, Articles, Docs */}
+      {cls.resource_links && cls.resource_links.length > 0 && (
+        <div className="animate-in animate-in-2" style={{ marginBottom: 32 }}>
+          <span className="overline" style={{ display: "block", marginBottom: 16 }}>LEARNING RESOURCES</span>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
+            {cls.resource_links.map((res, ri) => (
+              <a
+                key={ri}
+                href={res.url}
+                target="_blank"
+                rel="noreferrer"
+                className="card"
+                style={{ padding: "14px 16px", textDecoration: "none", display: "flex", gap: 12, alignItems: "flex-start" }}
+              >
+                <div style={{
+                  width: 32, height: 32, borderRadius: 8, flexShrink: 0,
+                  background: res.type === "video" ? "#FF000015" : res.type === "docs" ? "var(--accent-subtle)" : "#0066FF15",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 14,
+                }}>
+                  {res.type === "video" ? "▶" : res.type === "docs" ? "📖" : "📝"}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <p style={{ fontSize: 13, fontWeight: 600, color: "var(--text-heading)", marginBottom: 2, lineHeight: 1.3 }}>{res.title}</p>
+                  <p style={{ fontSize: 11, color: "var(--text-tertiary)", fontFamily: "var(--font-mono)" }}>
+                    {res.channel || res.source || new URL(res.url).hostname}
+                  </p>
+                  {res.description && <p style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 4, lineHeight: 1.4 }}>{res.description}</p>}
+                </div>
+              </a>
+            ))}
+          </div>
         </div>
       )}
 

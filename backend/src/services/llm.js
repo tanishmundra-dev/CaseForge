@@ -5,6 +5,7 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 // Models to try in order — fallback chain
 const MODELS = [
+  "gemini-3.1-pro-preview",
   "gemini-2.5-pro",
   "gemini-2.5-flash",
   "gemini-2.0-flash",
@@ -102,84 +103,42 @@ function safeJSON(text) {
 // CHAT
 // ═══════════════════════════════════════════════════════════
 
-const CHAT_SYSTEM = `You are a JSON API for a curriculum design chatbot. Respond with ONLY a JSON object.
+const CHAT_SYSTEM = `You are a world-class curriculum architect who has designed top-rated courses for Coursera, Udemy, and Stanford Online. You respond as a JSON API. Respond with ONLY a JSON object.
+
+You specialize in: deep pedagogy (Bloom's Taxonomy, scaffolding, spaced repetition), industry-relevant curriculum design, beginner → advanced learning progression, practical job-ready teaching.
 
 ═══ NO COURSE EXISTS ═══
-Gather topic, audience, timeline through friendly conversation.
+Gather topic, audience, timeline through friendly conversation. Ask smart follow-up questions about:
+- Skill level of target audience
+- Specific outcomes they want (certification? job-ready? hobby?)
+- Any domain focus (fintech, healthcare, gaming, etc.)
 When ready: {"action":"generate","message":"confirmation text","context":{"topic":"...","audience":"...","timeline":"...","technologies":[],"additional_notes":""}}
 
 ═══ COURSE EXISTS (COURSE_CONTEXT provided) ═══
-Handle modifications. You MUST return COMPLETE data objects — never empty or partial.
+Handle modifications. You are REFINING an existing course.
+Rules: Do NOT regenerate everything. Only modify the requested section. Maintain consistency. Preserve difficulty progression.
 
-▸ Modify existing content:
-{"action":"modify","message":"what changed","level":"meta|week|class|assignment","week":1,"class":1,"assignment_index":0,"data":{COMPLETE object}}
+▸ Modify: {"action":"modify","message":"what changed","level":"meta|week|class|assignment","week":1,"class":1,"assignment_index":0,"data":{COMPLETE object}}
+▸ Add assignment: {"action":"modify","message":"what changed","level":"add_assignment","week":1,"class":1,"data":{COMPLETE assignment}}
 
-▸ Add a new assignment to a class:
-{"action":"modify","message":"what changed","level":"add_assignment","week":1,"class":1,"data":{COMPLETE assignment object}}
+═══ ASSIGNMENT SCHEMAS ═══
 
-═══ ASSIGNMENT SCHEMAS — always use these COMPLETE structures ═══
+CODING (type:"coding"): {"title":"...","description":"...","type":"coding","difficulty":"...","starter_code":"# 10+ lines real code with TODOs","solution_code":"# complete working solution","test_cases":[{"input":"...","expected_output":"...","description":"..."}],"rubric":[{"criterion":"...","excellent":"...","acceptable":"...","poor":"...","weight":50}],"hints":["..."],"pitfalls":["..."],"aha_moment":"...","questions":[],"files":[]}
 
-CODING assignment (type:"coding"):
-{"title":"...","description":"3+ sentences","type":"coding","difficulty":"Beginner|Intermediate|Advanced",
- "starter_code":"# Real working starter code\\ndef solve():\\n    pass\\n\\nprint(solve())",
- "test_cases":[{"input":"sample input","expected_output":"expected output","description":"what this tests"}],
- "rubric":[{"criterion":"Correctness","excellent":"...","acceptable":"...","poor":"...","weight":50},{"criterion":"Code Quality","excellent":"...","acceptable":"...","poor":"...","weight":50}],
- "hints":["concrete hint 1","concrete hint 2"],
- "pitfalls":["common mistake 1"],
- "aha_moment":"key insight students should discover",
- "questions":[],"files":[]}
+QUIZ (type:"objective"): {"title":"...","description":"...","type":"objective","difficulty":"...","questions":[{"type":"mcq","question":"...","options":["A","B","C","D"],"correct":0,"explanation":"..."},{"type":"fill_up","question":"The ___ is...","answer":"...","explanation":"..."}],"rubric":[],"hints":[],"pitfalls":[],"aha_moment":"","starter_code":"","test_cases":[],"files":[]}
 
-QUIZ/OBJECTIVE assignment (type:"objective"):
-{"title":"...","description":"3+ sentences about what this quiz tests","type":"objective","difficulty":"...",
- "questions":[
-   {"type":"mcq","question":"Specific technical question?","options":["correct answer","wrong 1","wrong 2","wrong 3"],"correct":0,"explanation":"Why this is correct"},
-   {"type":"mcq","question":"Another question?","options":["A","B","C","D"],"correct":2,"explanation":"Explanation"},
-   {"type":"fill_up","question":"The ___ keyword is used to...","answer":"correct answer","explanation":"Why"}
- ],
- "rubric":[],"hints":[],"pitfalls":[],"aha_moment":"","starter_code":"","test_cases":[],"files":[]}
-IMPORTANT: Quizzes MUST have 5+ questions with real technical content. Each MCQ needs 4 options.
+IDE (type:"ide"): {"title":"...","description":"...","type":"ide","difficulty":"...","files":[{"name":"...","content":"...","language":"..."}],"rubric":[{"criterion":"...","excellent":"...","acceptable":"...","poor":"...","weight":50}],"hints":["..."],"pitfalls":["..."],"aha_moment":"...","starter_code":"","test_cases":[],"questions":[]}
 
-IDE/PROJECT assignment (type:"ide"):
-{"title":"...","description":"3+ sentences","type":"ide","difficulty":"...",
- "files":[
-   {"name":"index.html","content":"<!DOCTYPE html>\\n<html>...</html>","language":"html"},
-   {"name":"style.css","content":"body { ... }","language":"css"},
-   {"name":"app.js","content":"// Real working code","language":"javascript"}
- ],
- "rubric":[{"criterion":"Functionality","excellent":"...","acceptable":"...","poor":"...","weight":50}],
- "hints":["hint"],"pitfalls":["pitfall"],"aha_moment":"insight",
- "starter_code":"","test_cases":[],"questions":[]}
-
-═══ CHOOSING ASSIGNMENT TYPES (TOPIC-AWARE) ═══
-Decide assignment types based on the COURSE TOPIC:
-
-▸ CODING / SOFTWARE / PROGRAMMING courses (e.g. Python, JavaScript, Docker, web dev, data structures, algorithms, DevOps, ML, APIs):
-  - MUST include "coding" assignments with real starter_code, test_cases, and rubric
-  - Each class should have at least 1 "coding" assignment where students write and run code
-  - Can also include "objective" quizzes for conceptual checks and "ide" for multi-file projects
-  - "coding" assignments should be the PRIMARY type
-
-▸ NON-CODING courses (e.g. marketing, history, business, design theory, management, finance):
-  - Use "objective" assignments (MCQ + fill-up quizzes) as the PRIMARY type
-  - Do NOT generate "coding" or "ide" assignments — they make no sense for non-technical topics
-  - Each class should have 1-2 "objective" assignments with 5+ real questions each
-
-▸ MIXED courses (e.g. data science, product management, UX with prototyping):
-  - Use a mix: "coding" for hands-on technical parts, "objective" for theory/concepts
-
-When the user asks to "add a quiz" → type:"objective" with 5+ real questions.
-When the user asks to "add a coding exercise" → type:"coding" with real starter code.
-When the user asks to "add a project" → type:"ide" with real files.
+═══ QUALITY BAR (CRITICAL) ═══
+- Every assignment must be portfolio-worthy, not toy exercises
+- Coding assignments: real starter code (10+ lines), complete solution_code, 3+ test cases with edge cases
+- Quizzes: 5+ questions, industry-relevant, with explanations
+- All content must match the difficulty curve: Week 1 = foundations, middle weeks = intermediate application, final weeks = advanced + capstone
 
 ═══ CONVERSATION ═══
 {"action":"chat","message":"your friendly response"}
 
-Rules:
-- "message" is shown to the user — keep it natural, never show JSON/code/system text in it.
-- ALL data objects must be COMPLETE with every field populated with real content.
-- NEVER return empty arrays for questions in objective assignments.
-- NEVER return placeholder text like "..." or "TODO" — use real, specific content.
-- Match the course topic and difficulty when generating content.`;
+Rules: "message" is shown to the user — keep it natural. ALL data objects must be COMPLETE. NEVER return empty arrays or placeholder text.`;
 
 async function chat(messages, currentCourse, fileContent) {
   let systemPrompt = CHAT_SYSTEM;
@@ -369,7 +328,7 @@ Rules:
     const week = outline.weeks[i];
     const isCodingCourse = /programming|coding|software|developer|python|javascript|typescript|java|c\+\+|rust|go|ruby|php|swift|kotlin|react|angular|vue|node|docker|kubernetes|devops|api|backend|frontend|fullstack|full.stack|web.dev|data.struct|algorithm|machine.learn|deep.learn|ml|ai|database|sql|git|linux|bash|shell|cloud|aws|azure|gcp|html|css|flask|django|express|spring/i.test(context.topic || outline.title || "");
 
-    const codingExample = `{"title":"Coding Exercise","description":"What to build - 3+ sentences","type":"coding","difficulty":"...","starter_code":"# Real working starter code with TODOs\\ndef solve():\\n    # TODO: implement\\n    pass\\n\\nif __name__ == '__main__':\\n    print(solve())","solution_code":"# complete working solution","test_cases":[{"input":"sample","expected_output":"expected","description":"what this tests"}],"rubric":[{"criterion":"Correctness","excellent":"...","acceptable":"...","poor":"...","weight":50},{"criterion":"Code Quality","excellent":"...","acceptable":"...","poor":"...","weight":50}],"hints":["concrete hint"],"pitfalls":["common mistake"],"aha_moment":"key insight"}`;
+    const codingExample = `{"title":"Coding Exercise","description":"What to build - 3+ sentences","type":"coding","difficulty":"...","starter_code":"# Real working starter code with TODOs for student to fill in\\ndef solve(n):\\n    # TODO: implement the solution\\n    pass\\n\\nif __name__ == '__main__':\\n    print(solve(5))","solution_code":"# COMPLETE working solution that passes ALL test cases\\ndef solve(n):\\n    if n <= 0: return 0\\n    if n == 1: return 1\\n    a, b = 0, 1\\n    for _ in range(2, n+1):\\n        a, b = b, a+b\\n    return b\\n\\nif __name__ == '__main__':\\n    print(solve(5))","test_cases":[{"input":"5","expected_output":"5","description":"fibonacci of 5"},{"input":"0","expected_output":"0","description":"edge case zero"},{"input":"10","expected_output":"55","description":"fibonacci of 10"}],"rubric":[{"criterion":"Correctness","excellent":"All test cases pass","acceptable":"Most test cases pass","poor":"Fails basic cases","weight":50},{"criterion":"Code Quality","excellent":"Clean, efficient, well-structured","acceptable":"Works but could be cleaner","poor":"Messy or inefficient","weight":50}],"hints":["concrete hint"],"pitfalls":["common mistake"],"aha_moment":"key insight"}`;
 
     const quizExample = `{"title":"Quiz","description":"Test understanding - 3+ sentences","type":"objective","difficulty":"...","questions":[{"type":"mcq","question":"Q?","options":["A","B","C","D"],"correct":0,"explanation":"Why"},{"type":"mcq","question":"Q2?","options":["A","B","C","D"],"correct":1,"explanation":"Why"},{"type":"mcq","question":"Q3?","options":["A","B","C","D"],"correct":2,"explanation":"Why"},{"type":"mcq","question":"Q4?","options":["A","B","C","D"],"correct":0,"explanation":"Why"},{"type":"fill_up","question":"The ___ is...","answer":"ans","explanation":"Why"}]}`;
 
@@ -393,48 +352,151 @@ Example assignments for Class 2: [${codingExample}, ${ideExample}]`;
 Example assignments: [${quizExample}]`;
     }
 
-    const weekPrompt = `Generate detailed content for Week ${week.number}: "${week.title}" of a course on "${outline.title}" for ${context.audience}.
+    // ────────────────────────────────────────────────
+    // PASS 2A: Generate DEEP lecture notes per class
+    // ────────────────────────────────────────────────
+    const classContents = [];
+    for (let ci = 0; ci < (week.classes || []).length; ci++) {
+      const classTitle = week.classes[ci]?.title || `Class ${ci + 1}`;
+      const phase = week.number <= Math.ceil(numWeeks / 3) ? "FOUNDATIONS" : week.number <= Math.ceil(numWeeks * 2 / 3) ? "INTERMEDIATE" : "ADVANCED";
+      const lecturePrompt = `You are a world-class instructor who has taught 100,000+ students on Coursera and Udemy. You are writing a COMPLETE lecture for a paid premium course ($100+ value).
+
+YOUR PEDAGOGY: Start from INTUITION → then formal concept → then APPLICATION → then edge cases. Every section must answer "Why does this matter?" before diving in. Use Bloom's Taxonomy: Remember → Understand → Apply → Analyze → Evaluate → Create.
+
+Course: "${outline.title}" | Audience: ${context.audience} | Level: ${outline.difficulty || "Intermediate"}
+Week ${week.number}/${numWeeks}: "${week.title}" > Class ${ci + 1}: "${classTitle}"
+Phase: ${phase} — ${phase === "FOUNDATIONS" ? "Build strong intuition and mental models. Assume ZERO prior knowledge of this specific topic." : phase === "INTERMEDIATE" ? "Apply concepts to real-world scenarios. Challenge assumptions. Introduce complexity." : "Production-grade thinking. Trade-offs, optimization, architecture decisions. Prepare for interviews and real jobs."}
+
+Write a COMPLETE lecture in markdown. This is the ONLY study material students have before attempting assignments. It must teach the topic thoroughly enough that a student with ZERO prior knowledge of this specific topic can understand it, practice it, and pass certification-level assessments.
+
+REQUIRED STRUCTURE (follow this exactly):
+
+# ${classTitle}
+
+## Learning Objectives
+- List 4-6 specific, measurable learning objectives ("By the end of this lesson, you will be able to...")
+
+## Prerequisites
+- What the student should know before this lesson (reference previous weeks/classes if applicable)
+
+## Introduction
+- Why this topic matters (real-world context, industry relevance)
+- Where this fits in the bigger picture of the course
+- A motivating example or scenario (3-4 paragraphs)
+
+## Core Concepts
+### [Concept 1 Name]
+- Detailed explanation with examples (not just definitions)
+- Diagrams described in text if relevant
+- Common misconceptions addressed
+${isCodingCourse ? "- Code examples with line-by-line explanation" : "- Worked examples with step-by-step reasoning"}
+
+### [Concept 2 Name]
+- Same depth as above
+- Build on Concept 1 where possible
+
+### [Concept 3+ Name]
+- Continue for all key concepts (typically 3-5 per class)
+
+## Deep Dive / Advanced Details
+- Edge cases, gotchas, performance considerations
+- Industry best practices
+- How professionals actually use this in production
+${isCodingCourse ? "- Common bugs and how to debug them\n- Time/space complexity analysis where relevant" : "- Common mistakes in applying these concepts\n- How experts think about this differently than beginners"}
+
+## Worked Examples
+- 2-3 complete worked examples, starting simple and increasing complexity
+${isCodingCourse ? "- Full code with comments explaining each step\n- Show the output and explain why" : "- Step-by-step solutions to realistic problems"}
+
+## Practice Exercises (conceptual)
+- 3-4 quick self-check questions (not graded, just for self-assessment)
+- Answers included inline
+
+## Key Takeaways
+- Bullet-point summary of the most important concepts
+- "Remember this" highlights
+
+## What's Next
+- Brief preview of how this connects to the next class/topic
+
+QUALITY BAR (this is a $150 paid course — match that quality):
+- MINIMUM 2000 words (aim for 3000+ for technical topics)
+- Every concept: intuition FIRST ("imagine you're..."), then formal definition, then hands-on example, then edge cases
+- ${isCodingCourse ? "Include 8+ code blocks with REAL, RUNNABLE code. Show input AND output. Explain line-by-line for complex code." : "Include 5+ real-world case studies. Use specific company names, real data scenarios, actual industry examples."}
+- Use analogies and metaphors to explain complex ideas (e.g., "Think of a Docker container like a shipping container...")
+- Include "💡 Pro Tip" callouts for industry wisdom
+- Include "⚠️ Common Mistake" callouts for pitfalls
+- Include "🎯 Key Insight" callouts for aha moments
+- Write like you're TALKING to the student — conversational, engaging, not textbook-dry
+- After each major concept, include a "✅ Check Your Understanding" mini-question
+- NO fluff, NO generic explanations, NO "in this section we will learn..." filler
+- Every paragraph must teach something SPECIFIC and ACTIONABLE
+- A student who reads ONLY this lecture should be able to pass a certification exam on this topic
+
+CONTENT RULES:
+- DO NOT start with "In this lesson..." or "We will cover..." — START with a hook (a problem, a story, a question)
+- DO NOT give dictionary definitions — give INTUITIVE explanations with examples
+- DO NOT repeat the same concept in different words to pad length — add NEW value in every sentence
+- DO use real tool names, real library names, real command-line examples
+- DO include "Before vs After" comparisons when introducing new concepts
+- DO end with a clear bridge to the next lesson
+
+Return JSON: {"theory_content": "the complete markdown lesson (use \\n for newlines)", "description": "3-4 sentence class description that explains the TRANSFORMATION — what the student can DO after this class that they couldn't before"}`;
+
+      const lectureText = await callLLM(
+        "You are a world-class course instructor writing premium lecture content. Write like the best Coursera instructor — deep, practical, engaging. Minimum 2000 words. Every concept needs intuition + example + edge cases. No filler. No generic text. Real code, real scenarios, real value.",
+        [{ role: "user", content: lecturePrompt }],
+        32768
+      );
+      const lectureData = safeJSON(lectureText);
+      classContents.push({
+        title: classTitle,
+        theory_content: lectureData?.theory_content || "",
+        description: lectureData?.description || `In-depth session covering ${classTitle}.`,
+      });
+      if (onProgress) onProgress("status", { message: `Writing lecture for Week ${week.number}, Class ${ci + 1}...` });
+    }
+
+    // ────────────────────────────────────────────────
+    // PASS 2B: Generate assignments + resources per week
+    // ────────────────────────────────────────────────
+    const weekPrompt = `Generate assignments and learning resources for Week ${week.number}: "${week.title}" of "${outline.title}" for ${context.audience}.
 
 ${assignmentGuidance}
 
-IMPORTANT: Each class MUST include a "theory_content" field — this is the STUDY MATERIAL students read BEFORE attempting assignments. It should be a comprehensive markdown-formatted lesson covering:
-- Key concepts explained clearly with examples
-- Code snippets or formulas where relevant
-- Step-by-step explanations of important processes
-- Real-world analogies to make concepts intuitive
-- Minimum 300 words per class theory
+For each class, also generate a "resources" array with:
+- 2-3 YouTube video recommendations (real channels: Corey Schafer, Traversy Media, freeCodeCamp, Fireship, Net Ninja, Sentdex, TechWorld with Nana, etc.)
+  Format: {"type":"video","title":"Video title","url":"https://youtube.com/watch?v=...","channel":"Channel Name","description":"What this video covers and why it's useful"}
+- 2-3 blog/article recommendations (real sites: MDN, Real Python, freeCodeCamp, GeeksforGeeks, Medium, dev.to, official docs)
+  Format: {"type":"article","title":"Article title","url":"https://...","source":"Site Name","description":"What this covers"}
+- 1 official documentation link if applicable
+  Format: {"type":"docs","title":"Official Docs - Topic","url":"https://docs...","source":"Official","description":"Reference documentation"}
 
 Return JSON: {"classes":[
   {
     "number":1,"title":"${week.classes[0]?.title || 'Class 1'}",
-    "description":"Detailed 3-4 sentence description of what students learn",
-    "theory_content":"# Topic Title\\n\\nDetailed lesson content in markdown format. Explain concepts, give examples, include code snippets where relevant.\\n\\n## Subtopic 1\\n\\nExplanation with examples...\\n\\n## Subtopic 2\\n\\nMore content with code blocks:\\n\\n\`\`\`python\\nprint('hello')\\n\`\`\`\\n\\n## Key Takeaways\\n\\n- Point 1\\n- Point 2",
-    "references":[{"title":"Resource","url":"https://real-url","description":"Why useful"}],
+    "resources":[... video, article, docs objects ...],
     "assignments":[... see assignment examples above ...]
   },
   {
     "number":2,"title":"${week.classes[1]?.title || 'Class 2'}",
-    "description":"Detailed description",
-    "theory_content":"# Another Topic\\n\\nComprehensive lesson content...\\n\\n## Section 1\\n\\nExplanation...\\n\\n## Section 2\\n\\nMore details...",
-    "references":[{"title":"Resource","url":"https://real-url","description":"Why"}],
+    "resources":[... video, article, docs objects ...],
     "assignments":[... see assignment examples above ...]
   }
 ]}
 
 Rules:
-- CRITICAL: "theory_content" is MANDATORY for every class. Students study this BEFORE doing assignments. Write it like a textbook lesson — thorough, clear, with examples and code snippets. Minimum 300 words.
-- CRITICAL: "coding" assignments MUST have "starter_code" with 10+ lines of real runnable code. Include function stubs, TODOs, imports, and a main block that prints output. Students CANNOT solve exercises without starter code.
-- CRITICAL: "coding" assignments MUST have "test_cases" with at least 2 entries. Each test case needs "input", "expected_output", and "description".
-- Objective quizzes must have 5+ questions with real technical content
-- Descriptions must be 3+ sentences
-- References must use real URLs (MDN, W3Schools, freeCodeCamp, docs, etc)
-- Make content progressively harder (this is week ${week.number} of ${numWeeks})
-- EVERY field must have real content — no empty strings, no "..." placeholders`;
+- "coding" assignments MUST have "starter_code" (10+ lines), "solution_code" (complete working solution), and "test_cases" (3+ with edge cases)
+- Quizzes MUST have 5+ questions with real technical content
+- Resources MUST use real, well-known educational URLs — not made-up links
+- YouTube URLs should point to real channels known for this topic
+- Make content progressively harder (week ${week.number} of ${numWeeks})
+- EVERY field must have real content`;
 
     const weekText = await callLLM(
-      "Generate detailed course content as JSON. CRITICAL: every coding assignment MUST have real starter_code with 10+ lines. Every field must have real content.",
+      "Generate course assignments and curated learning resources as JSON. Use real YouTube channels and blog URLs.",
       [{ role: "user", content: weekPrompt }],
-      8192
+      12288
     );
 
     const weekData = safeJSON(weekText);
@@ -442,9 +504,10 @@ Rules:
       outline.weeks[i].classes = weekData.classes.map((cls, ci) => ({
         number: ci + 1,
         title: cls.title || week.classes[ci]?.title || `Class ${ci + 1}`,
-        description: cls.description || `Learn about ${cls.title || 'this topic'}.`,
-        theory_content: cls.theory_content || "",
-        references: cls.references || [],
+        description: classContents[ci]?.description || cls.description || `Learn about ${cls.title || 'this topic'}.`,
+        theory_content: classContents[ci]?.theory_content || cls.theory_content || "",
+        references: cls.references || cls.resources || [],
+        resources: cls.resources || [],
         assignments: (cls.assignments || []).map((a) => {
           const type = a.type || "coding";
           const asn = {
@@ -453,6 +516,7 @@ Rules:
             type,
             difficulty: a.difficulty || "Intermediate",
             starter_code: a.starter_code || "",
+            solution_code: a.solution_code || "",
             test_cases: a.test_cases || [],
             rubric: a.rubric || [],
             hints: a.hints || [],
@@ -484,9 +548,10 @@ Rules:
       outline.weeks[i].classes = (week.classes || []).map((cls, ci) => ({
         number: ci + 1,
         title: cls.title || `Class ${ci + 1}`,
-        description: `Hands-on session covering ${cls.title || 'key concepts'}.`,
-        theory_content: `# ${cls.title || 'Class ' + (ci + 1)}\n\nThis lesson covers the key concepts of ${cls.title || 'this topic'}. Study the material below before attempting the assignments.\n\n## Overview\n\nContent will be generated when you regenerate this class.`,
+        description: classContents[ci]?.description || `Hands-on session covering ${cls.title || 'key concepts'}.`,
+        theory_content: classContents[ci]?.theory_content || `# ${cls.title || 'Class ' + (ci + 1)}\n\nThis lesson covers the key concepts of ${cls.title || 'this topic'}.`,
         references: [],
+        resources: [],
         assignments: [{
           title: `${cls.title} Exercise`, description: "Practice what you learned.",
           type: "coding", difficulty: "Intermediate",

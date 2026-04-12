@@ -106,9 +106,11 @@ async function saveCourseToDb(courseData, status) {
       const classId = `c-${uuidv4().slice(0, 6)}`;
       // Try with resource_links + theory_content, fall back gracefully
       let classInserted = false;
+      // Merge references + resources into one resource_links array
+      const allResources = [...(cls.references || []), ...(cls.resources || [])];
       const { error: clErr1 } = await supabase.from("classes").insert({
         id: classId, number: cls.number, title: cls.title,
-        description: cls.description || "", resource_links: cls.references || [],
+        description: cls.description || "", resource_links: allResources,
         theory_content: cls.theory_content || "",
         week_id: weekId,
       });
@@ -137,7 +139,7 @@ async function saveCourseToDb(courseData, status) {
 
       for (const asn of cls.assignments || []) {
         const asnId = `a-${uuidv4().slice(0, 6)}`;
-        const { error: aErr } = await supabase.from("assignments").insert({
+        const asnPayload = {
           id: asnId,
           title: asn.title || "Exercise",
           description: asn.description || "",
@@ -147,12 +149,19 @@ async function saveCourseToDb(courseData, status) {
           pitfalls: asn.pitfalls || [],
           aha_moment: asn.aha_moment || "",
           starter_code: asn.starter_code || "",
+          solution_code: asn.solution_code || "",
           test_cases: asn.test_cases || [],
           rubric: asn.rubric || [],
           questions: asn.questions || [],
           files: asn.files || [],
           class_id: classId,
-        });
+        };
+        let { error: aErr } = await supabase.from("assignments").insert(asnPayload);
+        // Fallback if solution_code column doesn't exist yet
+        if (aErr && aErr.message.includes("solution_code")) {
+          delete asnPayload.solution_code;
+          ({ error: aErr } = await supabase.from("assignments").insert(asnPayload));
+        }
         if (aErr) console.error(`      Assignment "${asn.title}" insert failed:`, aErr.message);
         else console.log(`      Assignment: "${asn.title}" (${asn.type}) saved`);
       }
@@ -244,6 +253,91 @@ router.post("/courses/:courseId/publish", async (req, res) => {
     .eq("id", courseId)
     .single();
   res.json(await buildCourseObject(updated));
+});
+
+// ── Assignment CRUD ──
+
+router.get("/classes/:classId", async (req, res) => {
+  const { data: cls } = await supabase.from("classes").select("*").eq("id", req.params.classId).maybeSingle();
+  if (!cls) return res.status(404).json({ error: "Class not found" });
+
+  const { data: week } = await supabase.from("weeks").select("*").eq("id", cls.week_id).maybeSingle();
+  const { data: course } = week ? await supabase.from("courses").select("*").eq("id", week.course_id).maybeSingle() : { data: null };
+  const { data: assignments } = await supabase.from("assignments").select("*").eq("class_id", cls.id);
+
+  res.json({
+    ...cls,
+    week_number: week?.number,
+    week_title: week?.title,
+    course_id: course?.id,
+    course_title: course?.title,
+    assignments: assignments || [],
+  });
+});
+
+router.post("/classes/:classId/assignments", async (req, res) => {
+  const asnId = `a-${require("uuid").v4().slice(0, 6)}`;
+  const payload = {
+    id: asnId,
+    title: req.body.title || "New Assignment",
+    description: req.body.description || "",
+    difficulty: req.body.difficulty || "Intermediate",
+    type: req.body.type || "coding",
+    hints: req.body.hints || [],
+    pitfalls: req.body.pitfalls || [],
+    aha_moment: req.body.aha_moment || "",
+    starter_code: req.body.starter_code || "",
+    solution_code: req.body.solution_code || "",
+    test_cases: req.body.test_cases || [],
+    rubric: req.body.rubric || [],
+    questions: req.body.questions || [],
+    files: req.body.files || [],
+    class_id: req.params.classId,
+  };
+  let { error } = await supabase.from("assignments").insert(payload);
+  if (error && error.message.includes("solution_code")) {
+    delete payload.solution_code;
+    ({ error } = await supabase.from("assignments").insert(payload));
+  }
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(payload);
+});
+
+router.put("/assignments/:assignmentId", async (req, res) => {
+  const { assignmentId } = req.params;
+  const fields = {};
+  const allowed = ["title", "description", "difficulty", "type", "hints", "pitfalls", "aha_moment", "starter_code", "solution_code", "test_cases", "rubric", "questions", "files"];
+  for (const k of allowed) {
+    if (req.body[k] !== undefined) fields[k] = req.body[k];
+  }
+  if (Object.keys(fields).length === 0) return res.status(400).json({ error: "No fields to update" });
+
+  const { error } = await supabase.from("assignments").update(fields).eq("id", assignmentId);
+  if (error) return res.status(500).json({ error: error.message });
+
+  const { data: updated } = await supabase.from("assignments").select("*").eq("id", assignmentId).maybeSingle();
+  res.json(updated);
+});
+
+router.delete("/assignments/:assignmentId", async (req, res) => {
+  const { error } = await supabase.from("assignments").delete().eq("id", req.params.assignmentId);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ success: true });
+});
+
+// ── Class update ──
+
+router.put("/classes/:classId", async (req, res) => {
+  const fields = {};
+  if (req.body.title !== undefined) fields.title = req.body.title;
+  if (req.body.description !== undefined) fields.description = req.body.description;
+  if (req.body.theory_content !== undefined) fields.theory_content = req.body.theory_content;
+
+  const { error } = await supabase.from("classes").update(fields).eq("id", req.params.classId);
+  if (error) return res.status(500).json({ error: error.message });
+
+  const { data: updated } = await supabase.from("classes").select("*").eq("id", req.params.classId).maybeSingle();
+  res.json(updated);
 });
 
 // ── Mission Control: File Upload & Text Extraction ──

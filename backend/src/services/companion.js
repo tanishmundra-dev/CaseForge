@@ -21,7 +21,7 @@ TONE: Supportive but challenging. Like a senior dev reviewing a junior's PR — 
 
 async function smartCompanionChat(messages, assignment, currentCode) {
   const model = genAI.getGenerativeModel({
-    model: "gemini-2.5-flash",
+    model: "gemini-3.1-pro-preview",
     generationConfig: {
       maxOutputTokens: 500,
       temperature: 0.7,

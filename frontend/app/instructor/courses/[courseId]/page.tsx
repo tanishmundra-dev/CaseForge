@@ -5,7 +5,7 @@ import { fetchAPI } from "@/lib/api";
 import Link from "next/link";
 import {
   ChevronDown, ChevronRight, BookOpen, Code, FileText, ExternalLink,
-  Pencil, Upload, ArrowLeft, Loader2,
+  Pencil, Upload, ArrowLeft, Loader2, Sparkles,
 } from "lucide-react";
 
 interface Assignment { title: string; description: string; type: string; difficulty: string; starter_code?: string; hints?: string[]; pitfalls?: string[]; aha_moment?: string; questions?: any[]; files?: any[]; test_cases?: any[]; rubric?: any[]; }
@@ -145,7 +145,7 @@ export default function CourseDetailPage() {
             className="btn-secondary"
             style={{ flex: 1, fontSize: 12, padding: "8px 12px" }}
           >
-            <Pencil size={13} /> Edit
+            <Sparkles size={13} /> Edit with AI
           </Link>
           {course.status === "draft" && (
             <button
@@ -173,7 +173,10 @@ export default function CourseDetailPage() {
               <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.1em" }}>
                 Week {selectedClass!.week} &middot; Class {cls.number}
               </span>
-              <h1 className="display-heading" style={{ fontSize: 26, marginTop: 6, marginBottom: 12 }}>{cls.title}</h1>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <h1 className="display-heading" style={{ fontSize: 26, marginTop: 6, marginBottom: 12 }}>{cls.title}</h1>
+                <a href={`/instructor/classes/${cls.id}`} className="btn-secondary" style={{ padding: "4px 10px", fontSize: 11, marginTop: 4 }}>Edit Class</a>
+              </div>
 
               {/* Description / Lecture Notes */}
               {cls.description && (

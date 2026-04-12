@@ -33,6 +33,7 @@ function MissionControlInner() {
   const [editVal, setEditVal] = useState("");
   const [expandedWeeks, setExpandedWeeks] = useState<Set<number>>(new Set());
   const [expandedClasses, setExpandedClasses] = useState<Set<string>>(new Set());
+  const [expandedTheory, setExpandedTheory] = useState<Set<string>>(new Set());
   const [modifiedKey, setModifiedKey] = useState<string | null>(null);
   const [typingText, setTypingText] = useState<string | null>(null);
   const [courseLoading, setCourseLoading] = useState(false);
@@ -575,19 +576,43 @@ function MissionControlInner() {
                                   <Editable id={`cd.${week.number}.${cls.number}`} val={cls.description || ""} as="p" style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6, marginBottom: 16 }} />
                                 )}
 
-                                {/* Theory Content Preview */}
-                                {cls.theory_content && cls.theory_content.trim() && (
-                                  <div style={{ marginBottom: 14, padding: "12px 16px", background: "var(--accent-subtle)", borderRadius: 8, border: "1px solid var(--accent)20" }}>
-                                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
-                                      <BookOpen size={12} color="var(--accent)" />
-                                      <span style={{ fontSize: 10, fontWeight: 600, color: "var(--accent)", textTransform: "uppercase" }}>Study Material</span>
-                                      <span style={{ fontSize: 10, color: "var(--text-tertiary)", marginLeft: "auto" }}>{cls.theory_content.length} chars</span>
+                                {/* Theory Content — Expandable */}
+                                {cls.theory_content && cls.theory_content.trim() && (() => {
+                                  const tKey = `${week.number}-${cls.number}`;
+                                  const tOpen = expandedTheory.has(tKey);
+                                  return (
+                                  <div style={{ marginBottom: 14 }}>
+                                    <div
+                                      onClick={() => setExpandedTheory((p) => { const s = new Set(p); s.has(tKey) ? s.delete(tKey) : s.add(tKey); return s; })}
+                                      style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px", background: "var(--accent-subtle)", borderRadius: tOpen ? "8px 8px 0 0" : 8, border: "1px solid rgba(217,119,6,0.15)", cursor: "pointer", userSelect: "none" }}
+                                    >
+                                      {tOpen ? <ChevronDown size={13} color="var(--accent)" /> : <ChevronRight size={13} color="var(--accent)" />}
+                                      <BookOpen size={13} color="var(--accent)" />
+                                      <span style={{ fontSize: 12, fontWeight: 600, color: "var(--accent)", flex: 1 }}>Study Material / Lecture Notes</span>
+                                      <span style={{ fontSize: 10, color: "var(--text-tertiary)", fontFamily: "var(--font-mono)" }}>{Math.round(cls.theory_content.length / 5)} words</span>
                                     </div>
-                                    <p style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.6, maxHeight: 80, overflow: "hidden", whiteSpace: "pre-wrap" }}>
-                                      {cls.theory_content.slice(0, 200)}{ cls.theory_content.length > 200 ? "..." : ""}
-                                    </p>
+                                    {tOpen && (
+                                      <div style={{ padding: "16px 20px", background: "var(--bg-secondary)", border: "1px solid var(--border)", borderTop: "none", borderRadius: "0 0 8px 8px", maxHeight: 500, overflowY: "auto" }}>
+                                        <div
+                                          style={{ fontSize: 13, lineHeight: 1.8, color: "var(--text-primary)" }}
+                                          dangerouslySetInnerHTML={{ __html: cls.theory_content
+                                            .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre style="background:#1a1a18;color:#e8e4df;padding:12px;border-radius:6px;font-size:11px;font-family:var(--font-mono);overflow-x:auto;margin:8px 0;line-height:1.5"><code>$2</code></pre>')
+                                            .replace(/`([^`]+)`/g, '<code style="background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;font-size:12px;font-family:var(--font-mono)">$1</code>')
+                                            .replace(/^### (.+)$/gm, '<h4 style="font-size:14px;font-weight:700;margin:16px 0 6px;color:var(--text-heading)">$1</h4>')
+                                            .replace(/^## (.+)$/gm, '<h3 style="font-size:16px;font-weight:700;margin:20px 0 8px;color:var(--text-heading)">$1</h3>')
+                                            .replace(/^# (.+)$/gm, '<h2 style="font-size:18px;font-weight:700;margin:0 0 12px;color:var(--accent)">$1</h2>')
+                                            .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                                            .replace(/\*(.+?)\*/g, '<em>$1</em>')
+                                            .replace(/^- (.+)$/gm, '<li style="margin:3px 0">$1</li>')
+                                            .replace(/((?:<li[^>]*>.*<\/li>\n?)+)/g, '<ul style="margin:6px 0 6px 18px;list-style:disc">$1</ul>')
+                                            .replace(/\n\n/g, '<br/><br/>')
+                                          }}
+                                        />
+                                      </div>
+                                    )}
                                   </div>
-                                )}
+                                  );
+                                })()}
 
                                 {/* Assignments */}
                                 {cls.assignments.map((asn, ai) => (

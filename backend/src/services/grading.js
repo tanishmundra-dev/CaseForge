@@ -1,189 +1,245 @@
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { runCode } = require("./codeRunner");
+require("dotenv").config();
 
-function randInt(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-function sample(arr, k) {
-  const shuffled = [...arr].sort(() => 0.5 - Math.random());
-  return shuffled.slice(0, k);
-}
+// ═══════════════════════════════════════════════════════════
+// TEST CASE RUNNER — executes student code against each test case
+// ═══════════════════════════════════════════════════════════
 
-async function gradeSubmission(assignment, code, execResult) {
-  await sleep(1500);
+async function runTestCases(code, testCases, language) {
+  if (!testCases || testCases.length === 0) return { passed: 0, total: 0, results: [] };
 
-  const codeLen = code.trim().length;
-  const hasOutput = !!(execResult && (execResult.stdout || "").trim());
-  const hasError = !!(execResult && (execResult.stderr || "").trim());
+  const results = [];
+  let passed = 0;
 
-  let baseScore;
-  if (codeLen < 50) {
-    baseScore = randInt(30, 45);
-  } else if (codeLen < 200) {
-    baseScore = randInt(55, 72);
-  } else {
-    baseScore = randInt(74, 95);
+  for (const tc of testCases) {
+    // Inject test input into the code if the test case has input
+    let testCode = code;
+    if (tc.input && tc.input.trim()) {
+      // Append a test call at the end of the student's code
+      if (language === "javascript" || language === "node") {
+        testCode += `\n\n// AUTO-TEST\nconsole.log(solve(${tc.input}));`;
+      } else {
+        testCode += `\n\n# AUTO-TEST\nif __name__ == '__main__':\n    print(solve(${tc.input}))`;
+      }
+    }
+
+    const exec = await runCode(testCode, language, 8);
+    const actual = (exec.stdout || "").trim();
+    const expected = (tc.expected_output || "").trim();
+    const match = actual === expected || actual.includes(expected);
+
+    results.push({
+      description: tc.description || "Test case",
+      input: tc.input || "",
+      expected: expected,
+      actual: actual,
+      error: exec.stderr || "",
+      passed: match && !exec.stderr,
+    });
+
+    if (match && !exec.stderr) passed++;
   }
 
-  if (hasOutput && !hasError) {
-    baseScore = Math.min(100, baseScore + 5);
-  } else if (hasError) {
-    baseScore = Math.max(0, baseScore - 10);
-  }
+  return { passed, total: testCases.length, results };
+}
+
+// ═══════════════════════════════════════════════════════════
+// AI GRADING — Gemini analyzes code quality + rubric scoring
+// ═══════════════════════════════════════════════════════════
+
+async function aiGrade(assignment, code, execResult, testResults) {
+  const model = genAI.getGenerativeModel({
+    model: "gemini-3.1-pro-preview",
+    generationConfig: {
+      responseMimeType: "application/json",
+      maxOutputTokens: 2000,
+      temperature: 0.3,
+    },
+  });
 
   const rubric = assignment.rubric || [];
-  const criterionScores = rubric.map((item) => {
-    const variance = randInt(-8, 8);
-    const score = Math.max(0, Math.min(100, baseScore + variance));
-    let level;
-    if (score >= 80) level = "Excellent";
-    else if (score >= 60) level = "Acceptable";
-    else level = "Poor";
+  const rubricText = rubric.length > 0
+    ? rubric.map((r) => `- ${r.criterion} (weight: ${r.weight}%): Excellent="${r.excellent}", Acceptable="${r.acceptable}", Poor="${r.poor}"`).join("\n")
+    : "- Correctness (weight: 50%)\n- Code Quality (weight: 50%)";
 
-    const feedbackMap = {
-      Excellent: [
-        "Strong implementation that demonstrates clear understanding.",
-        "Well-executed with attention to edge cases.",
-        "Impressive work — goes beyond the basics.",
-      ],
-      Acceptable: [
-        "Functional but could be more robust.",
-        "The core idea is right, but details need polish.",
-        "Works for the happy path — consider edge cases.",
-      ],
-      Poor: [
-        "This section needs significant rework.",
-        "Missing key implementation details.",
-        "The approach doesn't meet the requirements yet.",
-      ],
-    };
+  const testSummary = testResults.total > 0
+    ? `Test cases: ${testResults.passed}/${testResults.total} passed\n${testResults.results.map((r) => `  ${r.passed ? "PASS" : "FAIL"}: ${r.description} | expected="${r.expected}" got="${r.actual}" ${r.error ? "error=" + r.error.slice(0, 100) : ""}`).join("\n")}`
+    : "No test cases defined.";
 
-    const options = feedbackMap[level];
+  const prompt = `You are a strict but fair code grading engine. Analyze this student submission and grade it.
+
+ASSIGNMENT: "${assignment.title}"
+Description: ${(assignment.description || "").slice(0, 500)}
+Type: ${assignment.type || "coding"}
+Difficulty: ${assignment.difficulty || "Intermediate"}
+
+STUDENT'S CODE:
+\`\`\`
+${code.slice(0, 3000)}
+\`\`\`
+
+EXECUTION RESULT:
+stdout: ${(execResult.stdout || "").slice(0, 500)}
+stderr: ${(execResult.stderr || "").slice(0, 500)}
+exit_code: ${execResult.exit_code ?? "unknown"}
+
+${testSummary}
+
+RUBRIC:
+${rubricText}
+
+Grade this submission. Return JSON:
+{
+  "criterion_scores": [
+    {"criterion": "Criterion Name", "score": 0-100, "level": "Excellent|Acceptable|Poor", "feedback": "specific feedback for this criterion referencing their actual code"}
+  ],
+  "overall_feedback": "2-3 sentences analyzing the submission — mention specific strengths and issues in their code",
+  "strengths": ["specific strength 1", "specific strength 2"],
+  "improvements": ["specific actionable improvement 1", "specific actionable improvement 2"]
+}
+
+GRADING RULES:
+- If ALL test cases pass: minimum 70 for Correctness criterion
+- If NO test cases pass: maximum 40 for Correctness criterion
+- If code has runtime errors: maximum 50 overall
+- If code is empty or trivial (<20 chars): maximum 20 overall
+- Reference SPECIFIC lines/patterns in their code in feedback
+- Match criterion names and weights from the rubric above
+- Be specific, not generic — mention actual variable names, functions, patterns`;
+
+  try {
+    const result = await model.generateContent({
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+    });
+
+    const text = result.response.text().trim();
+    let parsed;
+    try { parsed = JSON.parse(text); } catch {
+      const clean = text.replace(/```json?\s*/g, "").replace(/```\s*/g, "").trim();
+      try { parsed = JSON.parse(clean); } catch { return null; }
+    }
+    return parsed;
+  } catch (err) {
+    console.error("AI grading error:", err.message);
+    return null;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// MAIN GRADING FUNCTION — combines test execution + AI analysis
+// ═══════════════════════════════════════════════════════════
+
+async function gradeSubmission(assignment, code, execResult) {
+  const language = detectLanguage(assignment, code);
+  const testCases = assignment.test_cases || [];
+
+  // Step 1: Run test cases
+  const testResults = await runTestCases(code, testCases, language);
+
+  // Step 2: Calculate base score from test results
+  let testScore = 0;
+  if (testResults.total > 0) {
+    testScore = Math.round((testResults.passed / testResults.total) * 100);
+  } else {
+    // No test cases — base on execution success
+    const hasOutput = !!(execResult && (execResult.stdout || "").trim());
+    const hasError = !!(execResult && (execResult.stderr || "").trim());
+    testScore = hasOutput && !hasError ? 70 : hasError ? 30 : 50;
+  }
+
+  // Step 3: AI grading via Gemini
+  const aiResult = await aiGrade(assignment, code, execResult, testResults);
+
+  // Step 4: Combine results
+  if (aiResult && aiResult.criterion_scores && aiResult.criterion_scores.length > 0) {
+    // Use AI-scored criteria
+    const rubric = assignment.rubric || [];
+    const criterionScores = aiResult.criterion_scores.map((cs) => {
+      const rubricItem = rubric.find((r) => r.criterion === cs.criterion);
+      return {
+        criterion: cs.criterion,
+        score: Math.max(0, Math.min(100, cs.score)),
+        weight: rubricItem?.weight || Math.round(100 / aiResult.criterion_scores.length),
+        level: cs.level || (cs.score >= 80 ? "Excellent" : cs.score >= 60 ? "Acceptable" : "Poor"),
+        feedback: cs.feedback || "",
+      };
+    });
+
+    // Weighted average
+    const totalWeight = criterionScores.reduce((sum, cs) => sum + (cs.weight || 0), 0);
+    const weightedSum = criterionScores.reduce((sum, cs) => sum + cs.score * (cs.weight || 0), 0);
+    const overall = totalWeight > 0 ? Math.round(weightedSum / totalWeight) : testScore;
+
     return {
-      criterion: item.criterion || "Unknown",
+      overall_score: overall,
+      grade: scoreToGrade(overall),
+      criterion_scores: criterionScores,
+      overall_feedback: aiResult.overall_feedback || `Score: ${overall}/100.`,
+      strengths: aiResult.strengths || [],
+      improvements: aiResult.improvements || [],
+      test_results: testResults,
+    };
+  }
+
+  // Fallback: test-score based grading (if AI fails)
+  const rubric = assignment.rubric || [
+    { criterion: "Correctness", weight: 60 },
+    { criterion: "Code Quality", weight: 40 },
+  ];
+
+  const hasError = !!(execResult && (execResult.stderr || "").trim());
+  const criterionScores = rubric.map((item) => {
+    let score;
+    if (item.criterion.toLowerCase().includes("correct")) {
+      score = testScore;
+    } else {
+      score = hasError ? Math.max(20, testScore - 20) : Math.min(100, testScore + 10);
+    }
+    return {
+      criterion: item.criterion || "General",
       score,
-      level,
-      feedback: options[randInt(0, options.length - 1)],
+      weight: item.weight || 50,
+      level: score >= 80 ? "Excellent" : score >= 60 ? "Acceptable" : "Poor",
+      feedback: score >= 80 ? "Solid work." : score >= 60 ? "Adequate but could improve." : "Needs revision.",
     };
   });
 
-  const avg =
-    criterionScores.length > 0
-      ? criterionScores.reduce((sum, cs) => sum + cs.score, 0) /
-        criterionScores.length
-      : baseScore;
-  const overall = Math.round(avg);
-
-  let grade;
-  if (overall >= 90) grade = "A";
-  else if (overall >= 85) grade = "A-";
-  else if (overall >= 80) grade = "B+";
-  else if (overall >= 75) grade = "B";
-  else if (overall >= 70) grade = "B-";
-  else if (overall >= 65) grade = "C+";
-  else if (overall >= 60) grade = "C";
-  else if (overall >= 50) grade = "D";
-  else grade = "F";
-
-  const strengthsPool = [
-    "Good understanding of the core concepts",
-    "Clean separation of concerns",
-    "Correct use of Python standard library",
-    "Solid grasp of container fundamentals",
-    "Nice use of error handling in key sections",
-  ];
-  const improvementsPool = [
-    "Add error handling for edge cases",
-    "Consider container-specific behavior",
-    "Add logging for production debugging",
-    "Optimize for minimal resource usage",
-    "Add input validation and type hints",
-  ];
-
-  let execNote = "";
-  if (execResult) {
-    if (hasOutput && !hasError) {
-      execNote = " Code executed successfully.";
-    } else if (hasError) {
-      execNote = " Code had errors during execution.";
-    }
-  }
-
-  let overallFeedback;
-  if (overall >= 75) {
-    overallFeedback = "Strong submission demonstrating solid understanding.";
-  } else if (overall >= 60) {
-    overallFeedback = "Decent attempt with room for improvement.";
-  } else {
-    overallFeedback = "This submission needs significant work.";
-  }
+  const totalWeight = criterionScores.reduce((sum, cs) => sum + cs.weight, 0);
+  const weightedSum = criterionScores.reduce((sum, cs) => sum + cs.score * cs.weight, 0);
+  const overall = totalWeight > 0 ? Math.round(weightedSum / totalWeight) : testScore;
 
   return {
     overall_score: overall,
-    grade,
+    grade: scoreToGrade(overall),
     criterion_scores: criterionScores,
-    overall_feedback: `${overallFeedback}${execNote} Overall score: ${overall}/100.`,
-    strengths: sample(strengthsPool, 2),
-    improvements: sample(improvementsPool, 2),
+    overall_feedback: `${testResults.total > 0 ? `${testResults.passed}/${testResults.total} test cases passed.` : "Code executed."} ${hasError ? "Runtime errors detected." : ""} Score: ${overall}/100.`,
+    strengths: testResults.passed > 0 ? ["Some test cases pass correctly"] : ["Code submitted"],
+    improvements: testResults.passed < testResults.total ? ["Fix failing test cases"] : ["Review edge cases"],
+    test_results: testResults,
   };
 }
 
-async function companionChat(messages, assignment, code) {
-  await sleep(500);
-
-  const lastMsg =
-    messages.length > 0 ? messages[messages.length - 1].content.toLowerCase() : "";
-
-  if (lastMsg.includes("docker") || lastMsg.includes("container")) {
-    return {
-      content:
-        "Good question! Remember that containers are isolated processes — they have their own filesystem, network, and process tree. Think about what that means for your code: environment variables, hostnames, and file paths all change.",
-    };
-  } else if (
-    lastMsg.includes("kubernetes") ||
-    lastMsg.includes("k8s") ||
-    lastMsg.includes("pod")
-  ) {
-    return {
-      content:
-        "With Kubernetes, think declaratively — you describe the desired state, and K8s makes it happen. The key resources are: Pods (smallest unit), Deployments (manage replicas), and Services (expose Pods to network traffic).",
-    };
-  } else if (lastMsg.includes("yaml") || lastMsg.includes("manifest")) {
-    return {
-      content:
-        "Every K8s manifest needs four things: apiVersion, kind, metadata (with name and labels), and spec. Get those right and you're 80% there. Labels are how K8s connects resources to each other.",
-    };
-  } else if (
-    lastMsg.includes("help") ||
-    lastMsg.includes("stuck") ||
-    lastMsg.includes("start")
-  ) {
-    return {
-      content:
-        "Start with the simplest version that works. Get the basic structure right, run it, then add complexity. The assignments are designed to build on each other — don't skip ahead!",
-    };
-  } else if (
-    lastMsg.includes("error") ||
-    lastMsg.includes("bug") ||
-    lastMsg.includes("fix")
-  ) {
-    return {
-      content:
-        "Try running your code first to see the exact error. Common issues: missing imports, wrong variable names, or forgetting to call the function. The error message usually tells you exactly where to look.",
-    };
-  } else if (lastMsg.includes("test") || lastMsg.includes("run")) {
-    return {
-      content:
-        "Use the Run Code button to execute your solution. Check the output panel for stdout (green) and stderr (red). The test cases show you what output is expected.",
-    };
-  } else {
-    return {
-      content:
-        "That's a great question! Think about the specific problem the assignment is asking you to solve. What's the core logic needed? Start there, and let the hints guide you if you get stuck.",
-    };
-  }
+function scoreToGrade(score) {
+  if (score >= 90) return "A";
+  if (score >= 85) return "A-";
+  if (score >= 80) return "B+";
+  if (score >= 75) return "B";
+  if (score >= 70) return "B-";
+  if (score >= 65) return "C+";
+  if (score >= 60) return "C";
+  if (score >= 50) return "D";
+  return "F";
 }
 
-module.exports = { gradeSubmission, companionChat };
+function detectLanguage(assignment, code) {
+  const title = (assignment.title || "").toLowerCase();
+  const desc = (assignment.description || "").toLowerCase();
+  if (title.includes("javascript") || title.includes("node") || title.includes("js") || desc.includes("javascript")) return "javascript";
+  if (code.includes("console.log") || code.includes("function ") || code.includes("const ") || code.includes("let ")) return "javascript";
+  return "python";
+}
+
+module.exports = { gradeSubmission };
