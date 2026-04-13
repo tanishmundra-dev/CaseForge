@@ -60,7 +60,21 @@ function AssignmentRouter() {
    QUIZ VIEW — Light theme, inline MCQ + fill-up
    ═══════════════════════════════════════════════════════════ */
 function QuizView({ assignment, courseId, classId }: { assignment: AssignmentDetail; courseId: string; classId: string }) {
-  const questions = assignment.questions || [];
+  // Normalize questions so options can be string[] OR {id,text}[], and correct can be numeric OR correct_id letter.
+  const questions = (assignment.questions || []).map((q: any) => {
+    if (!q || typeof q !== "object") return q;
+    if (q.type === "fill_up") return q;
+    const opts = (q.options || []).map((o: any) =>
+      typeof o === "string" ? { id: o.slice(0, 6), text: o } : { id: o.id ?? "", text: o.text ?? String(o) }
+    );
+    let correctIndex = -1;
+    if (typeof q.correct === "number") {
+      correctIndex = q.correct;
+    } else if (q.correct_id) {
+      correctIndex = opts.findIndex((o: any) => o.id === q.correct_id);
+    }
+    return { ...q, options: opts, correct: correctIndex >= 0 ? correctIndex : 0 };
+  });
   const [answers, setAnswers] = useState<Record<number, any>>({});
   const [submitted, setSubmitted] = useState(false);
   const [score, setScore] = useState<number | null>(null);
@@ -163,7 +177,8 @@ function QuizView({ assignment, courseId, classId }: { assignment: AssignmentDet
 
                 {q.type === "mcq" && (
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    {(q.options || []).map((opt: string, oi: number) => {
+                    {(q.options || []).map((opt: any, oi: number) => {
+                      const optText = typeof opt === "string" ? opt : (opt?.text ?? "");
                       const selected = answers[qi] === oi;
                       const correct = submitted && oi === q.correct;
                       const wrong = submitted && selected && oi !== q.correct;
@@ -187,7 +202,7 @@ function QuizView({ assignment, courseId, classId }: { assignment: AssignmentDet
                               {selected && <div style={{ width: 10, height: 10, borderRadius: "50%", background: "var(--accent)" }} />}
                             </div>
                           )}
-                          <span style={{ fontSize: 14, color: correct ? "var(--success)" : wrong ? "var(--danger)" : "var(--text-primary)", flex: 1 }}>{opt}</span>
+                          <span style={{ fontSize: 14, color: correct ? "var(--success)" : wrong ? "var(--danger)" : "var(--text-primary)", flex: 1 }}>{optText}</span>
                           {showYourAnswerTag && (
                             <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: wrong ? "var(--danger)" : "var(--success)", padding: "2px 8px", border: `1px solid ${wrong ? "var(--danger)" : "var(--success)"}55`, borderRadius: 999, flexShrink: 0 }}>
                               Your answer

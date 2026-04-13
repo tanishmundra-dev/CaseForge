@@ -78,18 +78,42 @@ async function buildCourseObject(course) {
 }
 
 // ── Helper: save full course to Supabase ──
+// If courseData.id is provided, UPDATE that course (wipe children + re-insert).
+// Otherwise INSERT a new course with a fresh id. Preserves published status on update.
 async function saveCourseToDb(courseData, status) {
-  const courseId = `course-${uuidv4().slice(0, 8)}`;
-  console.log(`Saving course: "${courseData.title}" with ${courseData.weeks?.length} weeks`);
+  const isUpdate = !!courseData.id;
+  const courseId = isUpdate ? courseData.id : `course-${uuidv4().slice(0, 8)}`;
+  console.log(`${isUpdate ? "Updating" : "Saving"} course: "${courseData.title}" (id=${courseId}) with ${courseData.weeks?.length} weeks`);
 
-  const { error: courseErr } = await supabase.from("courses").insert({
-    id: courseId,
-    title: courseData.title,
-    description: courseData.description,
-    difficulty: courseData.difficulty || "Intermediate",
-    status: status || "draft",
-  });
-  if (courseErr) { console.error("Course insert failed:", courseErr.message); throw courseErr; }
+  if (isUpdate) {
+    // Cascade deletes weeks → classes → assignments (FK ON DELETE CASCADE in schema).
+    const { data: existingWeeks } = await supabase.from("weeks").select("id").eq("course_id", courseId);
+    if (existingWeeks && existingWeeks.length > 0) {
+      await supabase.from("weeks").delete().eq("course_id", courseId);
+    }
+    // Resolve new status: explicit `status` arg wins; else keep whatever the course currently has.
+    let newStatus = status;
+    if (!newStatus) {
+      const { data: existing } = await supabase.from("courses").select("status").eq("id", courseId).maybeSingle();
+      newStatus = existing?.status || "draft";
+    }
+    const { error: updateErr } = await supabase.from("courses").update({
+      title: courseData.title,
+      description: courseData.description,
+      difficulty: courseData.difficulty || "Intermediate",
+      status: newStatus,
+    }).eq("id", courseId);
+    if (updateErr) { console.error("Course update failed:", updateErr.message); throw updateErr; }
+  } else {
+    const { error: courseErr } = await supabase.from("courses").insert({
+      id: courseId,
+      title: courseData.title,
+      description: courseData.description,
+      difficulty: courseData.difficulty || "Intermediate",
+      status: status || "draft",
+    });
+    if (courseErr) { console.error("Course insert failed:", courseErr.message); throw courseErr; }
+  }
 
   for (const week of courseData.weeks || []) {
     const weekId = `w-${uuidv4().slice(0, 6)}`;

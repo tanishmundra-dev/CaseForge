@@ -1,11 +1,12 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { fetchAPI } from "@/lib/api";
 import {
   ArrowRight, BookOpen, ChevronDown, ChevronUp, Play, FileText,
   Wrench, CheckCircle2, Circle, Clock, ExternalLink, CheckCheck,
+  HelpCircle, Code2, Trophy,
 } from "lucide-react";
 
 function renderMarkdown(md: string): string {
@@ -59,14 +60,30 @@ const unitIcons: Record<string, any> = {
   reading: <BookOpen size={16} />,
   activity: <Wrench size={16} />,
   quiz: <FileText size={16} />,
+  checkpoint_quiz: <HelpCircle size={16} />,
+  checkpoint_coding: <Code2 size={16} />,
+  graded_assignment: <Trophy size={16} />,
 };
 const unitColors: Record<string, string> = {
   video: "#DC2626",
   reading: "#D97706",
   activity: "#16A34A",
   quiz: "#7C3AED",
+  checkpoint_quiz: "#7C3AED",
+  checkpoint_coding: "#0EA5E9",
+  graded_assignment: "#F59E0B",
 };
-const unitLabels: Record<string, string> = { video: "Video", reading: "Reading", activity: "Activity", quiz: "Quiz" };
+const unitLabels: Record<string, string> = {
+  video: "Video",
+  reading: "Reading",
+  activity: "Activity",
+  quiz: "Quiz",
+  checkpoint_quiz: "Checkpoint Quiz",
+  checkpoint_coding: "Checkpoint: Code",
+  graded_assignment: "Graded Assignment",
+};
+// Quiz-style units that should render the InlineQuiz interactive UI
+const QUIZ_TYPES = new Set(["quiz", "checkpoint_quiz"]);
 
 function getYouTubeId(url: string): string | null {
   if (!url) return null;
@@ -81,7 +98,7 @@ function getYouTubeId(url: string): string | null {
 
 function getYouTubeSearchEmbed(unit: any): string | null {
   // Priority: explicit URL (direct embed) > search query > title-based search
-  const ytId = getYouTubeId(unit.video_url || "");
+  const ytId = getYouTubeId(unit.youtube_url || unit.video_url || "");
   if (ytId) {
     return `https://www.youtube.com/embed/${ytId}?rel=0`;
   }
@@ -98,12 +115,13 @@ function getYouTubeSearchEmbed(unit: any): string | null {
 // Resolve the most appropriate link for a unit's video: prefer the saved URL
 // (direct video), fall back to YouTube search for the saved query/title.
 function getUnitVideoLink(unit: any): { href: string; label: string; direct: boolean } | null {
-  const ytId = getYouTubeId(unit.video_url || "");
+  const ytId = getYouTubeId(unit.youtube_url || unit.video_url || "");
   if (ytId) {
     return { href: `https://www.youtube.com/watch?v=${ytId}`, label: unit.video_channel || "YouTube", direct: true };
   }
-  if (unit.video_url) {
-    return { href: unit.video_url, label: unit.video_channel || "YouTube", direct: true };
+  const directUrl = unit.youtube_url || unit.video_url;
+  if (directUrl) {
+    return { href: directUrl, label: unit.video_channel || "YouTube", direct: true };
   }
   const query = unit.video_search_query || (unit.type === "video" ? unit.title : "");
   if (query) {
@@ -115,9 +133,25 @@ function getUnitVideoLink(unit: any): { href: string; label: string; direct: boo
 /* ═══════════════════════════════════════════════════════════
    INLINE QUIZ — interactive, graded, auto-completes unit
    ═══════════════════════════════════════════════════════════ */
-function InlineQuiz({ questions, unitIndex, courseId, classId, isDone, onComplete }: {
+function InlineQuiz({ questions: rawQuestions, unitIndex, courseId, classId, isDone, onComplete }: {
   questions: any[]; unitIndex: number; courseId: string; classId: string; isDone: boolean; onComplete: () => void;
 }) {
+  // Normalize to a single shape so we can render either { id, text } objects OR plain strings,
+  // and either correct_id (letter) OR correct (numeric index).
+  const questions = (rawQuestions || []).map((q: any) => {
+    if (!q || typeof q !== "object") return q;
+    if (q.type === "fill_up") return q;
+    const opts = (q.options || []).map((o: any) =>
+      typeof o === "string" ? { id: o.slice(0, 6), text: o } : { id: o.id ?? "", text: o.text ?? String(o) }
+    );
+    let correctIndex = -1;
+    if (typeof q.correct === "number") {
+      correctIndex = q.correct;
+    } else if (q.correct_id) {
+      correctIndex = opts.findIndex((o: any) => o.id === q.correct_id);
+    }
+    return { ...q, options: opts, correct: correctIndex >= 0 ? correctIndex : 0 };
+  });
   const [answers, setAnswers] = useState<Record<number, any>>({});
   const [submitted, setSubmitted] = useState(false);
   const [score, setScore] = useState<number | null>(null);
@@ -239,7 +273,8 @@ function InlineQuiz({ questions, unitIndex, courseId, classId, isDone, onComplet
             </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {(q.options || []).map((opt: string, oi: number) => {
+              {(q.options || []).map((opt: any, oi: number) => {
+                const optText = typeof opt === "string" ? opt : (opt?.text ?? "");
                 const selected = answers[qi] === oi;
                 const correct = submitted && oi === q.correct;
                 const wrong = submitted && selected && oi !== q.correct;
@@ -263,7 +298,7 @@ function InlineQuiz({ questions, unitIndex, courseId, classId, isDone, onComplet
                     }}>
                       {(selected || correct) && <div style={{ width: 10, height: 10, borderRadius: "50%", background: correct ? "var(--success)" : wrong ? "var(--danger)" : "var(--accent)" }} />}
                     </div>
-                    <span style={{ fontSize: 13, color: correct ? "var(--success)" : wrong ? "var(--danger)" : "var(--text-primary)", flex: 1 }}>{opt}</span>
+                    <span style={{ fontSize: 13, color: correct ? "var(--success)" : wrong ? "var(--danger)" : "var(--text-primary)", flex: 1 }}>{optText}</span>
                     {showYourAnswerTag && (
                       <span style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: wrong ? "var(--danger)" : "var(--success)", padding: "2px 7px", border: `1px solid ${wrong ? "var(--danger)" : "var(--success)"}55`, borderRadius: 999, flexShrink: 0 }}>
                         Your answer
@@ -386,6 +421,69 @@ export default function ClassDetailPage() {
   const completedCount = units.filter((_, i) => completed.has(i)).length;
   const progressPercent = hasUnits ? Math.round((completedCount / units.length) * 100) : 0;
 
+  /* ───────────────────────────────────────────────
+     SMART INTERLEAVING
+     Decide after which unit each assignment should appear.
+     Priority:
+       1. Explicit `assignment.after_unit_index` from LLM (newest courses)
+       2. Topic keyword match — place assignment after the unit whose title
+          shares the most distinctive keywords with the assignment title
+       3. Even distribution — if no signal, spread assignments evenly so
+          each "chunk" of units ends with an assignment (e.g. 6u/2a → 3,6)
+     ─────────────────────────────────────────────── */
+  const STOPWORDS = new Set(["the","a","an","to","of","in","on","for","with","and","or","is","are","be","by","at","as","this","that","your","you","from","into","about","build","learn","using","use","how","what","why","make","create"]);
+  function keywords(s: string): Set<string> {
+    return new Set((s || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 3 && !STOPWORDS.has(w)));
+  }
+  function placementIndex(asn: any, asnOrder: number, totalAsn: number, unitsArr: any[]): number {
+    if (unitsArr.length === 0) return -1;
+    // 1. Explicit hint
+    if (typeof asn.after_unit_index === "number" && asn.after_unit_index >= 0 && asn.after_unit_index < unitsArr.length) {
+      return asn.after_unit_index;
+    }
+    // 2. Topic match
+    const asnKw = keywords(asn.title || "");
+    let bestIdx = -1;
+    let bestScore = 0;
+    unitsArr.forEach((u, ui) => {
+      const uKw = keywords((u.title || "") + " " + (u.content || "").slice(0, 500));
+      let overlap = 0;
+      for (const w of asnKw) if (uKw.has(w)) overlap++;
+      if (overlap > bestScore) { bestScore = overlap; bestIdx = ui; }
+    });
+    if (bestScore >= 2) return bestIdx; // require >1 keyword overlap to trust
+    // 3. Even distribution — final assignment ALWAYS caps the class
+    const chunkSize = Math.max(1, Math.ceil(unitsArr.length / totalAsn));
+    const evenIdx = Math.min(unitsArr.length - 1, (asnOrder + 1) * chunkSize - 1);
+    return evenIdx;
+  }
+
+  const assignments = cls.assignments || [];
+  // Compute a mapping: unit index → assignments that should appear right after it
+  const assignmentsAfterUnit: Record<number, any[]> = {};
+  const placedAssignmentIds = new Set<string>();
+  if (hasUnits && assignments.length > 0) {
+    assignments.forEach((asn: any, ai: number) => {
+      const idx = placementIndex(asn, ai, assignments.length, units);
+      if (idx >= 0) {
+        if (!assignmentsAfterUnit[idx]) assignmentsAfterUnit[idx] = [];
+        assignmentsAfterUnit[idx].push({ asn, order: ai });
+        placedAssignmentIds.add(asn.id);
+      }
+    });
+    // Safety: ensure no duplicates in sequence — dedupe by id per bucket
+    Object.keys(assignmentsAfterUnit).forEach((k) => {
+      const seen = new Set();
+      assignmentsAfterUnit[+k] = assignmentsAfterUnit[+k].filter(({ asn }: any) => {
+        if (seen.has(asn.id)) return false;
+        seen.add(asn.id);
+        return true;
+      });
+    });
+  }
+  // Any assignments NOT placed (e.g., interleaving disabled) render in a trailing section
+  const trailingAssignments = assignments.filter((a: any) => !placedAssignmentIds.has(a.id));
+
   return (
     <div style={{ padding: "40px 48px 80px", maxWidth: 900, margin: "0 auto" }}>
       {/* Breadcrumb */}
@@ -435,9 +533,10 @@ export default function ClassDetailPage() {
               const isDone = completed.has(ui);
               const color = unitColors[unit.type] || "var(--text-tertiary)";
 
+              const afterThisUnit = assignmentsAfterUnit[ui] || [];
               return (
+                <React.Fragment key={ui}>
                 <div
-                  key={ui}
                   ref={(el) => { unitRefs.current[ui] = el; }}
                   style={{ border: "1px solid var(--border)", borderRadius: isOpen ? 10 : 8, overflow: "hidden", background: isDone ? "rgba(22,163,74,0.03)" : "var(--bg-primary)", scrollMarginTop: 72 }}
                 >
@@ -480,7 +579,7 @@ export default function ClassDetailPage() {
                   {/* Expanded content */}
                   {isOpen && (() => {
                     const videoLink = getUnitVideoLink(unit);
-                    const ytId = getYouTubeId(unit.video_url || "");
+                    const ytId = getYouTubeId(unit.youtube_url || unit.video_url || "");
                     return (
                     <div style={{ borderTop: "1px solid var(--border)", padding: "20px 24px 20px 60px", background: "var(--bg-secondary)" }}>
                       {/* Inline embed for direct video_url */}
@@ -512,8 +611,8 @@ export default function ClassDetailPage() {
                         </a>
                       )}
 
-                      {/* Quiz unit — interactive */}
-                      {unit.type === "quiz" && unit.questions && unit.questions.length > 0 ? (
+                      {/* Quiz / checkpoint_quiz unit — interactive */}
+                      {QUIZ_TYPES.has(unit.type) && unit.questions && unit.questions.length > 0 ? (
                         <InlineQuiz
                           questions={unit.questions}
                           unitIndex={ui}
@@ -547,6 +646,26 @@ export default function ClassDetailPage() {
                     );
                   })()}
                 </div>
+                {/* Assignments placed after this unit by smart interleaving */}
+                {afterThisUnit.map(({ asn, order }: any) => (
+                  <Link
+                    key={`inline-asn-${asn.id}`}
+                    href={`/student/courses/${courseId}/classes/${classId}/assignments/${asn.id}`}
+                    className="card"
+                    style={{ padding: "14px 20px", display: "flex", alignItems: "center", gap: 14, textDecoration: "none", cursor: "pointer", borderLeft: "3px solid var(--accent)", background: "rgba(217,119,6,0.04)" }}
+                  >
+                    <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                      Assignment {order + 1}
+                    </span>
+                    <div style={{ flex: 1 }}>
+                      <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 14, color: "var(--text-heading)", marginBottom: 2 }}>{asn.title}</h3>
+                      <p style={{ color: "var(--text-secondary)", fontSize: 12, lineHeight: 1.4 }}>{asn.description?.slice(0, 100)}{(asn.description?.length || 0) > 100 ? "..." : ""}</p>
+                    </div>
+                    <span className="badge badge-neutral" style={{ fontSize: 10 }}>{asn.difficulty}</span>
+                    <ArrowRight size={14} color="var(--accent)" />
+                  </Link>
+                ))}
+                </React.Fragment>
               );
             })}
           </div>
@@ -563,23 +682,26 @@ export default function ClassDetailPage() {
         </div>
       )}
 
-      {/* Assignments */}
-      <div className="animate-in animate-in-3" style={{ marginBottom: 32 }}>
-        <span className="overline" style={{ display: "block", marginBottom: 12 }}>ASSIGNMENTS</span>
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {cls.assignments.map((asn, i) => (
-            <Link key={asn.id} href={`/student/courses/${courseId}/classes/${classId}/assignments/${asn.id}`} className="card" style={{ padding: "16px 20px", display: "flex", alignItems: "center", gap: 16, textDecoration: "none", cursor: "pointer" }}>
-              <span style={{ fontFamily: "var(--font-display)", fontSize: 24, fontWeight: 700, color: "var(--accent)", opacity: 0.4, minWidth: 28, lineHeight: 1 }}>{i + 1}</span>
-              <div style={{ flex: 1 }}>
-                <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, color: "var(--text-heading)", marginBottom: 2 }}>{asn.title}</h3>
-                <p style={{ color: "var(--text-secondary)", fontSize: 13, lineHeight: 1.4 }}>{asn.description?.slice(0, 100)}{(asn.description?.length || 0) > 100 ? "..." : ""}</p>
-              </div>
-              <span className="badge badge-neutral" style={{ fontSize: 10 }}>{asn.difficulty}</span>
-              <ArrowRight size={14} color="var(--text-tertiary)" />
-            </Link>
-          ))}
+      {/* Assignments section — only shown when there are NO units (so nothing to interleave with)
+          or if some assignments couldn't be placed inline. */}
+      {(!hasUnits ? cls.assignments : trailingAssignments).length > 0 && (
+        <div className="animate-in animate-in-3" style={{ marginBottom: 32 }}>
+          <span className="overline" style={{ display: "block", marginBottom: 12 }}>ASSIGNMENTS</span>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {(!hasUnits ? cls.assignments : trailingAssignments).map((asn: any, i: number) => (
+              <Link key={asn.id} href={`/student/courses/${courseId}/classes/${classId}/assignments/${asn.id}`} className="card" style={{ padding: "16px 20px", display: "flex", alignItems: "center", gap: 16, textDecoration: "none", cursor: "pointer" }}>
+                <span style={{ fontFamily: "var(--font-display)", fontSize: 24, fontWeight: 700, color: "var(--accent)", opacity: 0.4, minWidth: 28, lineHeight: 1 }}>{i + 1}</span>
+                <div style={{ flex: 1 }}>
+                  <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, color: "var(--text-heading)", marginBottom: 2 }}>{asn.title}</h3>
+                  <p style={{ color: "var(--text-secondary)", fontSize: 13, lineHeight: 1.4 }}>{asn.description?.slice(0, 100)}{(asn.description?.length || 0) > 100 ? "..." : ""}</p>
+                </div>
+                <span className="badge badge-neutral" style={{ fontSize: 10 }}>{asn.difficulty}</span>
+                <ArrowRight size={14} color="var(--text-tertiary)" />
+              </Link>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Resources — with inline YouTube search embeds */}
       {cls.resource_links && cls.resource_links.length > 0 && (() => {

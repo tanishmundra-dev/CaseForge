@@ -50,6 +50,8 @@ function MissionControlInner() {
   const [expandedWeeks, setExpandedWeeks] = useState<Set<number>>(new Set());
   const [expandedClasses, setExpandedClasses] = useState<Set<string>>(new Set());
   const [expandedTheory, setExpandedTheory] = useState<Set<string>>(new Set());
+  const [expandedUnits, setExpandedUnits] = useState<Set<string>>(new Set());
+  const [hiddenPreviews, setHiddenPreviews] = useState<Set<string>>(new Set());
   const [modifiedKey, setModifiedKey] = useState<string | null>(null);
   const [typingText, setTypingText] = useState<string | null>(null);
   const [courseLoading, setCourseLoading] = useState(false);
@@ -758,13 +760,31 @@ function MissionControlInner() {
   };
 
   const UnitPreview = ({ unit, index, weekNumber, classNumber, unitIcons, unitColors, totalUnits }: { unit: any; index: number; weekNumber: number; classNumber: number; unitIcons: Record<string, string>; unitColors: Record<string, string>; totalUnits: number }) => {
-    const [open, setOpen] = useState(false);
-    const [showPreview, setShowPreview] = useState(true);
+    const unitKey = `${weekNumber}-${classNumber}-${index}`;
+    const open = expandedUnits.has(unitKey);
+    const setOpen = (next: boolean) => {
+      setExpandedUnits((prev) => {
+        const nextSet = new Set(prev);
+        if (next) nextSet.add(unitKey); else nextSet.delete(unitKey);
+        return nextSet;
+      });
+    };
+    const showPreview = !hiddenPreviews.has(unitKey);
+    const setShowPreview = (nextOrFn: boolean | ((s: boolean) => boolean)) => {
+      setHiddenPreviews((prev) => {
+        const curr = !prev.has(unitKey);
+        const next = typeof nextOrFn === "function" ? (nextOrFn as (s: boolean) => boolean)(curr) : nextOrFn;
+        const nextSet = new Set(prev);
+        // `hiddenPreviews` holds keys where preview is HIDDEN. If next=true → show → remove from set.
+        if (next) nextSet.delete(unitKey); else nextSet.add(unitKey);
+        return nextSet;
+      });
+    };
     const titleFieldId = `lu-title.${weekNumber}.${classNumber}.${index}`;
     const durationFieldId = `lu-duration.${weekNumber}.${classNumber}.${index}`;
     const contentFieldId = `lu-content.${weekNumber}.${classNumber}.${index}`;
     const isEditingContent = editField === contentFieldId;
-    const videoUrl: string = unit.video_url || "";
+    const videoUrl: string = unit.video_url || unit.youtube_url || "";
     const ytId = extractYouTubeId(videoUrl);
     const urlInvalid = videoUrl.trim() && !ytId;
     return (
@@ -786,6 +806,9 @@ function MissionControlInner() {
             <option value="reading">reading</option>
             <option value="activity">activity</option>
             <option value="quiz">quiz</option>
+            <option value="checkpoint_quiz">checkpoint_quiz</option>
+            <option value="checkpoint_coding">checkpoint_coding</option>
+            <option value="graded_assignment">graded_assignment</option>
           </select>
           <span onClick={(e) => e.stopPropagation()} style={{ display: "inline-flex", alignItems: "center", flexShrink: 0 }}>
             <Editable id={durationFieldId} val={String(unit.duration ?? "")} style={{ fontSize: 10, color: "var(--text-tertiary)", fontFamily: "var(--font-mono)" }} />
@@ -864,6 +887,105 @@ function MissionControlInner() {
                 .replace(/\n\n/g, '<br/><br/>')
               }}
             />
+            {/* Quiz / checkpoint_quiz: show question editor + correct answers (instructor preview) */}
+            {(unit.type === "quiz" || unit.type === "checkpoint_quiz") && (
+              <div style={{ marginTop: 12, padding: 10, background: "var(--bg-tertiary)", borderRadius: 6, border: "1px solid var(--border)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                  <FileText size={12} color="#7C3AED" />
+                  <span style={{ fontSize: 10, fontWeight: 600, color: "var(--text-tertiary)", textTransform: "uppercase" }}>
+                    Questions ({(unit.questions || []).length})
+                  </span>
+                </div>
+                {(!unit.questions || unit.questions.length === 0) && (
+                  <p style={{ fontSize: 11, color: "var(--text-tertiary)", fontStyle: "italic" }}>No questions yet.</p>
+                )}
+                {(unit.questions || []).map((q: any, qi: number) => {
+                  const opts = (q.options || []).map((o: any) =>
+                    typeof o === "string" ? { id: o.slice(0, 6), text: o } : { id: o.id ?? "", text: o.text ?? String(o) }
+                  );
+                  // Resolve correct option (handle both numeric correct and letter correct_id)
+                  let correctIdx = -1;
+                  if (typeof q.correct === "number") correctIdx = q.correct;
+                  else if (q.correct_id) correctIdx = opts.findIndex((o: any) => o.id === q.correct_id);
+                  return (
+                    <div key={qi} style={{ marginBottom: 10, padding: "8px 10px", background: "var(--bg-secondary)", borderRadius: 5, border: "1px solid var(--border)" }}>
+                      <div style={{ display: "flex", gap: 6, alignItems: "flex-start", marginBottom: 6 }}>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: "#7C3AED", flexShrink: 0, marginTop: 2 }}>Q{qi + 1}</span>
+                        <p style={{ flex: 1, fontSize: 12, fontWeight: 500, lineHeight: 1.4, color: "var(--text-heading)" }}>{q.question}</p>
+                        <span style={{ fontSize: 9, color: "var(--text-tertiary)", textTransform: "uppercase", fontFamily: "var(--font-mono)" }}>{q.type || "mcq"}</span>
+                      </div>
+                      {q.type === "fill_up" ? (
+                        <div style={{ marginLeft: 18 }}>
+                          <span style={{ fontSize: 10, color: "var(--text-tertiary)", marginRight: 4 }}>Answer:</span>
+                          <span style={{ fontSize: 11, color: "var(--success)", fontWeight: 600 }}>{q.answer || "(none set)"}</span>
+                        </div>
+                      ) : (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 3, marginLeft: 18 }}>
+                          {opts.map((opt: any, oi: number) => (
+                            <div key={oi} style={{
+                              display: "flex", alignItems: "center", gap: 6, padding: "3px 6px", borderRadius: 4,
+                              background: oi === correctIdx ? "rgba(22,163,74,0.08)" : "transparent",
+                              border: oi === correctIdx ? "1px solid rgba(22,163,74,0.25)" : "1px solid transparent",
+                            }}>
+                              <span style={{ fontSize: 10, color: "var(--text-tertiary)", fontFamily: "var(--font-mono)", minWidth: 14 }}>{opt.id || String.fromCharCode(97 + oi)})</span>
+                              <span style={{ fontSize: 11, color: "var(--text-primary)", flex: 1 }}>{opt.text}</span>
+                              {oi === correctIdx && (
+                                <span style={{ fontSize: 9, fontWeight: 700, color: "var(--success)", textTransform: "uppercase", letterSpacing: "0.05em", padding: "1px 5px", border: "1px solid var(--success)55", borderRadius: 999 }}>
+                                  ✓ Correct
+                                </span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {q.explanation && (
+                        <div style={{ marginLeft: 18, marginTop: 6, fontSize: 10, color: "var(--text-tertiary)", fontStyle: "italic", borderLeft: "2px solid var(--border)", paddingLeft: 6 }}>
+                          💡 {q.explanation}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* checkpoint_coding / graded_assignment: show starter code, solution, test cases */}
+            {(unit.type === "checkpoint_coding" || unit.type === "graded_assignment") && (
+              <div style={{ marginTop: 12, padding: 10, background: "var(--bg-tertiary)", borderRadius: 6, border: "1px solid var(--border)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                  <Code size={12} color="#0EA5E9" />
+                  <span style={{ fontSize: 10, fontWeight: 600, color: "var(--text-tertiary)", textTransform: "uppercase" }}>
+                    {unit.type === "graded_assignment" ? "Graded Assignment" : "Coding Checkpoint"}
+                  </span>
+                </div>
+                {unit.starter_code && (
+                  <div style={{ marginBottom: 8 }}>
+                    <div style={{ fontSize: 9, fontWeight: 700, color: "var(--text-tertiary)", textTransform: "uppercase", marginBottom: 3 }}>Starter Code</div>
+                    <pre style={{ background: "#1a1a18", color: "#e8e4df", padding: 8, borderRadius: 4, fontSize: 10, lineHeight: 1.4, fontFamily: "var(--font-mono)", overflowX: "auto", maxHeight: 120 }}>{unit.starter_code}</pre>
+                  </div>
+                )}
+                {unit.solution_code && (
+                  <details style={{ marginBottom: 8 }}>
+                    <summary style={{ fontSize: 9, fontWeight: 700, color: "var(--success)", textTransform: "uppercase", cursor: "pointer", marginBottom: 3 }}>✓ Solution Code (hidden from students)</summary>
+                    <pre style={{ background: "#0d1f0d", color: "#a3e635", padding: 8, borderRadius: 4, fontSize: 10, lineHeight: 1.4, fontFamily: "var(--font-mono)", overflowX: "auto", maxHeight: 120, marginTop: 4 }}>{unit.solution_code}</pre>
+                  </details>
+                )}
+                {unit.test_cases && unit.test_cases.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: 9, fontWeight: 700, color: "var(--text-tertiary)", textTransform: "uppercase", marginBottom: 3 }}>Test Cases ({unit.test_cases.length})</div>
+                    {unit.test_cases.slice(0, 5).map((tc: any, ti: number) => (
+                      <div key={ti} style={{ display: "flex", gap: 6, fontSize: 10, fontFamily: "var(--font-mono)", padding: "2px 0", color: "var(--text-secondary)" }}>
+                        <span style={{ color: "var(--text-tertiary)" }}>{ti + 1}.</span>
+                        <span>in: <code style={{ background: "var(--bg-secondary)", padding: "0 4px", borderRadius: 2 }}>{JSON.stringify(tc.input ?? tc.args ?? "")}</code></span>
+                        <span>→</span>
+                        <span style={{ color: "var(--success)" }}>{JSON.stringify(tc.expected_output ?? "")}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             {unit.type === "video" && (
               <div style={{ marginTop: 12, padding: 10, background: "var(--bg-tertiary)", borderRadius: 6, border: "1px solid var(--border)" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
@@ -1065,8 +1187,24 @@ function MissionControlInner() {
                                 {cls.learning_units && cls.learning_units.length > 0 ? (() => {
                                   const tKey = `${week.number}-${cls.number}`;
                                   const tOpen = expandedTheory.has(tKey);
-                                  const unitIcons: Record<string, string> = { video: "▶", reading: "📖", activity: "🔧", quiz: "✓" };
-                                  const unitColors: Record<string, string> = { video: "#DC2626", reading: "var(--accent)", activity: "#16A34A", quiz: "#7C3AED" };
+                                  const unitIcons: Record<string, string> = {
+                                    video: "▶",
+                                    reading: "📖",
+                                    activity: "🔧",
+                                    quiz: "❓",
+                                    checkpoint_quiz: "❓",
+                                    checkpoint_coding: "💻",
+                                    graded_assignment: "🏆",
+                                  };
+                                  const unitColors: Record<string, string> = {
+                                    video: "#DC2626",
+                                    reading: "var(--accent)",
+                                    activity: "#16A34A",
+                                    quiz: "#7C3AED",
+                                    checkpoint_quiz: "#7C3AED",
+                                    checkpoint_coding: "#0EA5E9",
+                                    graded_assignment: "#F59E0B",
+                                  };
                                   const totalMins = cls.learning_units.reduce((s: number, u: any) => s + (u.duration || 0), 0);
                                   return (
                                   <div style={{ marginBottom: 14 }}>
@@ -1254,8 +1392,26 @@ function MissionControlInner() {
 
             {course.weeks.length > 0 && !isStreaming && (
               <div className="animate-in" style={{ display: "flex", gap: 12, marginTop: 24 }}>
-                <button className="btn-secondary" onClick={() => handleSave("draft")} disabled={saving || saved === "draft"} style={{ flex: 1 }}><Save size={14} /> {saved === "draft" ? "Saved as Draft" : "Save Draft"}</button>
-                <button className="btn-primary" onClick={() => handleSave("published")} disabled={saving || saved === "published"} style={{ flex: 1 }}><Upload size={14} /> {saving ? "Saving..." : saved === "published" ? "Published" : "Publish"}</button>
+                {course.status === "published" || saved === "published" ? (
+                  <>
+                    {/* Published course — primary action is "Save Changes" (stays published) */}
+                    <button className="btn-primary" onClick={() => handleSave("published")} disabled={saving} style={{ flex: 2 }}>
+                      <Save size={14} /> {saving ? "Saving..." : "Save Changes (Keep Published)"}
+                    </button>
+                    <button className="btn-secondary" onClick={() => handleSave("draft")} disabled={saving} style={{ flex: 1 }} title="Unpublish and save as draft">
+                      <Save size={14} /> Unpublish
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button className="btn-secondary" onClick={() => handleSave("draft")} disabled={saving || saved === "draft"} style={{ flex: 1 }}>
+                      <Save size={14} /> {saved === "draft" ? "Saved as Draft" : "Save Draft"}
+                    </button>
+                    <button className="btn-primary" onClick={() => handleSave("published")} disabled={saving} style={{ flex: 1 }}>
+                      <Upload size={14} /> {saving ? "Saving..." : "Publish"}
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>
