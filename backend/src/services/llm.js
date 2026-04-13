@@ -427,6 +427,33 @@ console.log("Result:", output);
 `;
 }
 
+function generateFallbackResources(classTitle, courseTitle) {
+  // Generate reasonable placeholder resources based on the class topic.
+  // These have empty URLs — the instructor fills them in.
+  // Better than showing "No resources" which looks broken.
+  const topic = classTitle || courseTitle || "this topic";
+  return [
+    {
+      type: "article",
+      title: `Getting Started with ${topic}`,
+      url: "",
+      description: `Introductory guide covering the fundamentals of ${topic}. Instructor: please add a URL from a trusted source.`,
+    },
+    {
+      type: "docs",
+      title: `Official Documentation — ${topic}`,
+      url: "",
+      description: `Reference documentation for the tools and APIs used in this class. Instructor: please add the relevant docs URL.`,
+    },
+    {
+      type: "video",
+      title: `${topic} — Video Tutorial`,
+      url: "",
+      description: `A video walkthrough of the core concepts. Instructor: search YouTube for a relevant tutorial and add the link.`,
+    },
+  ];
+}
+
 // ═══════════════════════════════════════════════════════════
 // LEARNING UNIT POST-PROCESSING
 // Assignments live INSIDE learning_units now (see FIX 1). This normalizer
@@ -598,32 +625,50 @@ Fill-up format: {"type":"fill_up","question":"The ___ is used to...","answer":"k
 - NO "In this section..." padding. Every sentence teaches something.
 - Pitfalls and aha_moments MUST be specific and non-obvious
 
-### RETURN FORMAT (JSON ONLY)
-{
-  "description": "3-4 sentence class description — what transformation happens",
-  "learning_units": [
-    { "type":"video", "title":"...", "duration":12, "content":"...", "completion_type":"auto", "video_search_query":"...", "video_channel":"..." },
-    { "type":"checkpoint_quiz", "title":"Check: concept A", "duration":4, "content":"Test what you just learned.", "completion_type":"graded",
-      "questions":[
-        {"type":"mcq","question":"...","options":[{"id":"a","text":"..."},{"id":"b","text":"..."},{"id":"c","text":"..."},{"id":"d","text":"..."}],"correct_id":"b","explanation":"..."},
-        {"type":"fill_up","question":"The ___ is...","answer":"...","explanation":"..."}
-      ]
-    },
-    { "type":"reading", "title":"...", "duration":15, "content":"# Heading\\n\\n...", "completion_type":"auto" },
-    { "type":"checkpoint_coding", "title":"Try It", "duration":8, "content":"Instructions", "completion_type":"graded",
-      "starter_code":"# 5-8 lines with one TODO", "solution_code":"# complete", "test_cases":[{"input":"...","expected_output":"...","description":"..."}]
-    },
-    { "type":"reading", "title":"Summary & What's Next", "duration":8, "content":"...", "completion_type":"auto" },
-    { "type":"graded_assignment", "title":"...", "duration":45, "content":"Full assignment description", "completion_type":"graded",
-      "starter_code":"# 10+ lines with TODOs", "solution_code":"# complete working solution",
-      "test_cases":[{"input":"...","expected_output":"...","description":"..."},{"input":"...","expected_output":"...","description":"edge case"},{"input":"...","expected_output":"...","description":"another edge"}],
-      "rubric":[{"criterion":"Correctness","excellent":"...","acceptable":"...","poor":"...","weight":50},{"criterion":"Code Quality","excellent":"...","acceptable":"...","poor":"...","weight":50}],
-      "hints":["..."], "pitfalls":["..."], "aha_moment":"..."
-    }
-  ]
-}
+### RETURN FORMAT (JSON ONLY — every field is REQUIRED)
 
-Return ONLY the JSON object — no markdown fences, no prose.`;
+You MUST return a JSON object with exactly these three top-level keys:
+1. "description" — 3-4 sentence class description
+2. "resource_links" — array of 3-5 external learning resources (REQUIRED, never empty)
+3. "learning_units" — array of 7-10 learning units
+
+resource_links format (3-5 items, NEVER return an empty array):
+[
+  {"type":"article","title":"SPECIFIC article title — not generic","url":"https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching","description":"Why this resource is worth reading"},
+  {"type":"video","title":"SPECIFIC video/talk title","url":"https://www.youtube.com/watch?v=REAL_ID_IF_KNOWN","description":"What the student learns from this"},
+  {"type":"docs","title":"Official documentation page title","url":"https://python.langchain.com/docs/get_started/introduction","description":"Reference for this topic"},
+  {"type":"book","title":"Book Title by Author Name","url":"","description":"Chapters X-Y cover this topic in depth"}
+]
+
+Resource rules:
+- NEVER return "resource_links": [] — always include 3-5 resources
+- Use REAL URLs from well-known sites: docs.anthropic.com, platform.openai.com/docs, python.langchain.com, docs.pinecone.io, realpython.com, developer.mozilla.org, freecodecamp.org
+- If unsure about a URL, include the resource with url:"" and a good title/description — the instructor can fill in the URL
+- Every resource needs a SPECIFIC title (not "Read about X") and a 1-sentence description of WHY it's useful
+
+learning_units format (7-10 items following the STRUCTURE PATTERN above):
+[
+  { "type":"video", "title":"...", "duration":12, "content":"...", "completion_type":"auto", "video_search_query":"...", "video_channel":"..." },
+  { "type":"checkpoint_quiz", "title":"Check: concept A", "duration":4, "content":"Test what you just learned.", "completion_type":"graded",
+    "questions":[
+      {"type":"mcq","question":"...","options":[{"id":"a","text":"..."},{"id":"b","text":"..."},{"id":"c","text":"..."},{"id":"d","text":"..."}],"correct_id":"b","explanation":"..."},
+      {"type":"fill_up","question":"The ___ is...","answer":"...","explanation":"..."}
+    ]
+  },
+  { "type":"reading", "title":"...", "duration":15, "content":"# Heading\\n\\n...", "completion_type":"auto" },
+  { "type":"checkpoint_coding", "title":"Try It", "duration":8, "content":"Instructions", "completion_type":"graded",
+    "starter_code":"# 5-8 lines with one TODO", "solution_code":"# complete", "test_cases":[{"input":"...","expected_output":"...","description":"..."}]
+  },
+  { "type":"reading", "title":"Summary & What's Next", "duration":8, "content":"...", "completion_type":"auto" },
+  { "type":"graded_assignment", "title":"...", "duration":45, "content":"Full assignment description", "completion_type":"graded",
+    "starter_code":"# 10+ lines with TODOs", "solution_code":"# complete working solution",
+    "test_cases":[{"input":"...","expected_output":"...","description":"..."},{"input":"...","expected_output":"...","description":"edge case"},{"input":"...","expected_output":"...","description":"another edge"}],
+    "rubric":[{"criterion":"Correctness","excellent":"...","acceptable":"...","poor":"...","weight":50},{"criterion":"Code Quality","excellent":"...","acceptable":"...","poor":"...","weight":50}],
+    "hints":["..."], "pitfalls":["..."], "aha_moment":"..."
+  }
+]
+
+Return ONLY the JSON object — no markdown fences, no explanation text.`;
 }
 
 function buildUnitsUserPrompt(weekNum, weekTitle, classNum, classTitle, outline, context, numWeeks) {
@@ -753,7 +798,12 @@ Rules:
             .filter((u) => u.type === "reading" || u.type === "video")
             .map((u) => `## ${u.title}\n\n${u.content}`)
             .join("\n\n---\n\n");
-          return { title: classTitle, description: data?.description || `In-depth session covering ${classTitle}.`, theory_content: theoryFallback, learning_units: units };
+          // Extract resources — fall back to auto-generated if LLM skipped them
+          let resourceLinks = Array.isArray(data?.resource_links) ? data.resource_links : [];
+          if (resourceLinks.length === 0) {
+            resourceLinks = generateFallbackResources(classTitle, outline.title);
+          }
+          return { title: classTitle, description: data?.description || `In-depth session covering ${classTitle}.`, theory_content: theoryFallback, learning_units: units, resource_links: resourceLinks };
         }
         console.log(`Units empty for Week ${weekNum} Class ${ci + 1}, attempt ${attempt + 1}/${MAX_ATTEMPTS}`);
       } catch (err) {
@@ -828,6 +878,11 @@ Rules:
           files: u.files || [],
         }));
 
+      // Frontend reads resources from different field names depending on the page
+      // (mission-control uses resource_links || resources, courses/[id] uses references,
+      // classes/[id] uses resource_links). Populate all three from the same source so
+      // every consumer sees the data.
+      const resourceLinks = Array.isArray(cc.resource_links) ? cc.resource_links : [];
       return {
         number: classNumber,
         title: classTitle,
@@ -835,8 +890,9 @@ Rules:
         theory_content: cc.theory_content || "",
         learning_units: units,
         assignments: gradedAssignments,
-        references: [],
-        resources: [],
+        references: resourceLinks,
+        resources: resourceLinks,
+        resource_links: resourceLinks,
       };
     });
 
