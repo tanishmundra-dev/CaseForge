@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { fetchAPI } from "@/lib/api";
@@ -34,7 +34,9 @@ interface LearningUnit {
   content: string;
   completion_type: string;
   video_url?: string;
+  video_search_query?: string;
   video_channel?: string;
+  questions?: any[];
 }
 
 interface Assignment {
@@ -78,17 +80,34 @@ function getYouTubeId(url: string): string | null {
 }
 
 function getYouTubeSearchEmbed(unit: any): string | null {
-  // Priority: search query > video_url with valid ID > title-based search
-  if (unit.video_search_query) {
-    return `https://www.youtube.com/embed?listType=search&list=${encodeURIComponent(unit.video_search_query)}`;
-  }
+  // Priority: explicit URL (direct embed) > search query > title-based search
   const ytId = getYouTubeId(unit.video_url || "");
   if (ytId) {
     return `https://www.youtube.com/embed/${ytId}?rel=0`;
   }
+  if (unit.video_search_query) {
+    return `https://www.youtube.com/embed?listType=search&list=${encodeURIComponent(unit.video_search_query)}`;
+  }
   // Fallback: search by unit title
   if (unit.type === "video" && unit.title) {
     return `https://www.youtube.com/embed?listType=search&list=${encodeURIComponent(unit.title + " tutorial")}`;
+  }
+  return null;
+}
+
+// Resolve the most appropriate link for a unit's video: prefer the saved URL
+// (direct video), fall back to YouTube search for the saved query/title.
+function getUnitVideoLink(unit: any): { href: string; label: string; direct: boolean } | null {
+  const ytId = getYouTubeId(unit.video_url || "");
+  if (ytId) {
+    return { href: `https://www.youtube.com/watch?v=${ytId}`, label: unit.video_channel || "YouTube", direct: true };
+  }
+  if (unit.video_url) {
+    return { href: unit.video_url, label: unit.video_channel || "YouTube", direct: true };
+  }
+  const query = unit.video_search_query || (unit.type === "video" ? unit.title : "");
+  if (query) {
+    return { href: `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`, label: `Search: ${query}`, direct: false };
   }
   return null;
 }
@@ -166,16 +185,32 @@ function InlineQuiz({ questions, unitIndex, courseId, classId, isDone, onComplet
       )}
 
       {/* Questions */}
-      {questions.map((q: any, qi: number) => (
+      {questions.map((q: any, qi: number) => {
+        const wasCorrect = submitted && isCorrect(qi);
+        return (
         <div key={qi} style={{
           padding: "14px 16px", borderRadius: 10, marginBottom: 8,
-          border: `1.5px solid ${submitted ? (isCorrect(qi) ? "var(--success)" : "var(--danger)") : "var(--border)"}`,
-          background: submitted ? (isCorrect(qi) ? "rgba(22,163,74,0.03)" : "rgba(220,38,38,0.03)") : "var(--bg-primary)",
+          border: `1.5px solid ${submitted ? (wasCorrect ? "var(--success)" : "var(--danger)") : "var(--border)"}`,
+          background: submitted ? (wasCorrect ? "rgba(22,163,74,0.03)" : "rgba(220,38,38,0.03)") : "var(--bg-primary)",
         }}>
-          <p style={{ fontSize: 14, fontWeight: 500, marginBottom: 10, lineHeight: 1.5 }}>
-            <span style={{ fontWeight: 700, color: "var(--accent)", marginRight: 6 }}>Q{qi + 1}</span>
-            {q.question}
-          </p>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "var(--accent)" }}>Q{qi + 1}</span>
+            <p style={{ flex: 1, fontSize: 14, fontWeight: 500, lineHeight: 1.5 }}>{q.question}</p>
+            {submitted && (
+              <span
+                role="status"
+                style={{
+                  fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 999,
+                  color: wasCorrect ? "var(--success)" : "var(--danger)",
+                  background: wasCorrect ? "rgba(22,163,74,0.1)" : "rgba(220,38,38,0.1)",
+                  border: `1px solid ${wasCorrect ? "var(--success)" : "var(--danger)"}33`,
+                  flexShrink: 0,
+                }}
+              >
+                {wasCorrect ? "✓ Correct" : "✗ Incorrect"}
+              </span>
+            )}
+          </div>
 
           {q.type === "fill_up" ? (
             <div>
@@ -185,10 +220,21 @@ function InlineQuiz({ questions, unitIndex, courseId, classId, isDone, onComplet
                 onChange={(e) => setAnswers((p) => ({ ...p, [qi]: e.target.value }))}
                 placeholder="Type your answer..."
                 disabled={submitted}
-                style={{ maxWidth: 300, ...(submitted ? { borderColor: isCorrect(qi) ? "var(--success)" : "var(--danger)" } : {}) }}
+                style={{ maxWidth: 300, ...(submitted ? { borderColor: wasCorrect ? "var(--success)" : "var(--danger)" } : {}) }}
               />
-              {submitted && !isCorrect(qi) && (
-                <p style={{ fontSize: 12, color: "var(--success)", marginTop: 6 }}>Correct: <strong>{q.answer}</strong></p>
+              {submitted && (
+                <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 10px", marginTop: 8, fontSize: 12 }}>
+                  <span style={{ color: "var(--text-tertiary)", textTransform: "uppercase", fontSize: 10, letterSpacing: "0.08em", alignSelf: "center" }}>Your answer</span>
+                  <span style={{ color: wasCorrect ? "var(--success)" : "var(--danger)", fontWeight: 600 }}>
+                    {answers[qi] ? String(answers[qi]) : <em style={{ fontWeight: 400, opacity: 0.7 }}>— no answer —</em>}
+                  </span>
+                  {!wasCorrect && (
+                    <>
+                      <span style={{ color: "var(--text-tertiary)", textTransform: "uppercase", fontSize: 10, letterSpacing: "0.08em", alignSelf: "center" }}>Correct answer</span>
+                      <span style={{ color: "var(--success)", fontWeight: 600 }}>{q.answer}</span>
+                    </>
+                  )}
+                </div>
               )}
             </div>
           ) : (
@@ -197,6 +243,8 @@ function InlineQuiz({ questions, unitIndex, courseId, classId, isDone, onComplet
                 const selected = answers[qi] === oi;
                 const correct = submitted && oi === q.correct;
                 const wrong = submitted && selected && oi !== q.correct;
+                const showYourAnswerTag = submitted && selected;
+                const showCorrectAnswerTag = submitted && oi === q.correct;
                 return (
                   <label
                     key={oi}
@@ -215,7 +263,17 @@ function InlineQuiz({ questions, unitIndex, courseId, classId, isDone, onComplet
                     }}>
                       {(selected || correct) && <div style={{ width: 10, height: 10, borderRadius: "50%", background: correct ? "var(--success)" : wrong ? "var(--danger)" : "var(--accent)" }} />}
                     </div>
-                    <span style={{ fontSize: 13, color: correct ? "var(--success)" : wrong ? "var(--danger)" : "var(--text-primary)" }}>{opt}</span>
+                    <span style={{ fontSize: 13, color: correct ? "var(--success)" : wrong ? "var(--danger)" : "var(--text-primary)", flex: 1 }}>{opt}</span>
+                    {showYourAnswerTag && (
+                      <span style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: wrong ? "var(--danger)" : "var(--success)", padding: "2px 7px", border: `1px solid ${wrong ? "var(--danger)" : "var(--success)"}55`, borderRadius: 999, flexShrink: 0 }}>
+                        Your answer
+                      </span>
+                    )}
+                    {showCorrectAnswerTag && !selected && (
+                      <span style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--success)", padding: "2px 7px", border: "1px solid var(--success)55", borderRadius: 999, flexShrink: 0 }}>
+                        Correct answer
+                      </span>
+                    )}
                   </label>
                 );
               })}
@@ -226,7 +284,8 @@ function InlineQuiz({ questions, unitIndex, courseId, classId, isDone, onComplet
             <p style={{ fontSize: 12, color: "var(--text-tertiary)", marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--border)", fontStyle: "italic" }}>{q.explanation}</p>
           )}
         </div>
-      ))}
+        );
+      })}
 
       {/* Submit / Retry */}
       <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px solid var(--border)", display: "flex", justifyContent: "flex-end", gap: 8 }}>
@@ -262,6 +321,23 @@ export default function ClassDetailPage() {
   const [expandedUnit, setExpandedUnit] = useState<number | null>(null);
   const [completed, setCompleted] = useState<Set<number>>(new Set());
   const [toggling, setToggling] = useState<number | null>(null);
+  const unitRefs = useRef<Record<number, HTMLDivElement | null>>({});
+
+  // When a unit expands, scroll its header toward the top of the viewport so
+  // the newly-revealed content always flows DOWN from the click location —
+  // avoids the "content opened above me, I have to scroll up" problem when
+  // collapsing a prior unit shifts layout upward.
+  const openUnit = (ui: number) => {
+    const next = expandedUnit === ui ? null : ui;
+    setExpandedUnit(next);
+    if (next !== null) {
+      // Defer to next frame so the DOM has the new expanded content before we measure.
+      requestAnimationFrame(() => {
+        const el = unitRefs.current[ui];
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
+  };
 
   useEffect(() => {
     fetchAPI(`/trainee/courses/${courseId}/classes/${classId}`)
@@ -360,11 +436,15 @@ export default function ClassDetailPage() {
               const color = unitColors[unit.type] || "var(--text-tertiary)";
 
               return (
-                <div key={ui} style={{ border: "1px solid var(--border)", borderRadius: isOpen ? 10 : 8, overflow: "hidden", background: isDone ? "rgba(22,163,74,0.03)" : "var(--bg-primary)" }}>
+                <div
+                  key={ui}
+                  ref={(el) => { unitRefs.current[ui] = el; }}
+                  style={{ border: "1px solid var(--border)", borderRadius: isOpen ? 10 : 8, overflow: "hidden", background: isDone ? "rgba(22,163,74,0.03)" : "var(--bg-primary)", scrollMarginTop: 72 }}
+                >
                   {/* Unit header */}
                   <div
                     style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", cursor: "pointer", userSelect: "none" }}
-                    onClick={() => setExpandedUnit(isOpen ? null : ui)}
+                    onClick={() => openUnit(ui)}
                   >
                     {/* Completion checkbox */}
                     <button
@@ -399,26 +479,38 @@ export default function ClassDetailPage() {
 
                   {/* Expanded content */}
                   {isOpen && (() => {
-                    const embedUrl = getYouTubeSearchEmbed(unit);
+                    const videoLink = getUnitVideoLink(unit);
+                    const ytId = getYouTubeId(unit.video_url || "");
                     return (
                     <div style={{ borderTop: "1px solid var(--border)", padding: "20px 24px 20px 60px", background: "var(--bg-secondary)" }}>
-                      {/* YouTube thumbnail + link */}
-                      {(unit.video_search_query || unit.video_url) && (() => {
-                        const query = unit.video_search_query || unit.title || "";
-                        const ytLink = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
-                        return (
-                          <a href={ytLink} target="_blank" rel="noreferrer" style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 16px", background: "#DC262608", borderRadius: 10, border: "1px solid #DC262620", marginBottom: 16, textDecoration: "none", cursor: "pointer" }}>
-                            <div style={{ width: 52, height: 52, borderRadius: 8, background: "#DC262615", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                              <Play size={22} color="#DC2626" />
-                            </div>
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <p style={{ fontSize: 14, fontWeight: 600, color: "#DC2626", marginBottom: 2 }}>Watch on YouTube</p>
-                              <p style={{ fontSize: 12, color: "var(--text-secondary)" }}>{unit.video_channel ? `${unit.video_channel} — ` : ""}{query}</p>
-                            </div>
-                            <ExternalLink size={14} color="var(--text-tertiary)" />
-                          </a>
-                        );
-                      })()}
+                      {/* Inline embed for direct video_url */}
+                      {ytId && (
+                        <div style={{ position: "relative", paddingBottom: "56.25%", height: 0, marginBottom: 16, borderRadius: 10, overflow: "hidden", border: "1px solid var(--border)" }}>
+                          <iframe
+                            src={`https://www.youtube.com/embed/${ytId}?rel=0`}
+                            title={unit.title}
+                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                            allowFullScreen
+                            style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: 0 }}
+                          />
+                        </div>
+                      )}
+
+                      {/* YouTube link card (direct or search fallback) */}
+                      {videoLink && (
+                        <a href={videoLink.href} target="_blank" rel="noreferrer" style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 16px", background: "#DC262608", borderRadius: 10, border: "1px solid #DC262620", marginBottom: 16, textDecoration: "none", cursor: "pointer" }}>
+                          <div style={{ width: 52, height: 52, borderRadius: 8, background: "#DC262615", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                            <Play size={22} color="#DC2626" />
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <p style={{ fontSize: 14, fontWeight: 600, color: "#DC2626", marginBottom: 2 }}>
+                              {videoLink.direct ? "Watch on YouTube" : "Search on YouTube"}
+                            </p>
+                            <p style={{ fontSize: 12, color: "var(--text-secondary)" }}>{videoLink.label}</p>
+                          </div>
+                          <ExternalLink size={14} color="var(--text-tertiary)" />
+                        </a>
+                      )}
 
                       {/* Quiz unit — interactive */}
                       {unit.type === "quiz" && unit.questions && unit.questions.length > 0 ? (
@@ -471,12 +563,30 @@ export default function ClassDetailPage() {
         </div>
       )}
 
+      {/* Assignments */}
+      <div className="animate-in animate-in-3" style={{ marginBottom: 32 }}>
+        <span className="overline" style={{ display: "block", marginBottom: 12 }}>ASSIGNMENTS</span>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {cls.assignments.map((asn, i) => (
+            <Link key={asn.id} href={`/student/courses/${courseId}/classes/${classId}/assignments/${asn.id}`} className="card" style={{ padding: "16px 20px", display: "flex", alignItems: "center", gap: 16, textDecoration: "none", cursor: "pointer" }}>
+              <span style={{ fontFamily: "var(--font-display)", fontSize: 24, fontWeight: 700, color: "var(--accent)", opacity: 0.4, minWidth: 28, lineHeight: 1 }}>{i + 1}</span>
+              <div style={{ flex: 1 }}>
+                <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, color: "var(--text-heading)", marginBottom: 2 }}>{asn.title}</h3>
+                <p style={{ color: "var(--text-secondary)", fontSize: 13, lineHeight: 1.4 }}>{asn.description?.slice(0, 100)}{(asn.description?.length || 0) > 100 ? "..." : ""}</p>
+              </div>
+              <span className="badge badge-neutral" style={{ fontSize: 10 }}>{asn.difficulty}</span>
+              <ArrowRight size={14} color="var(--text-tertiary)" />
+            </Link>
+          ))}
+        </div>
+      </div>
+
       {/* Resources — with inline YouTube search embeds */}
       {cls.resource_links && cls.resource_links.length > 0 && (() => {
         const videos = cls.resource_links.filter((r: any) => r.type === "video");
         const others = cls.resource_links.filter((r: any) => r.type !== "video");
         return (
-        <div className="animate-in animate-in-3" style={{ marginBottom: 32 }}>
+        <div className="animate-in animate-in-3">
           <span className="overline" style={{ display: "block", marginBottom: 12 }}>RESOURCES</span>
 
           {/* Video thumbnails linking to YouTube */}
@@ -520,24 +630,6 @@ export default function ClassDetailPage() {
         </div>
         );
       })()}
-
-      {/* Assignments */}
-      <div className="animate-in animate-in-3">
-        <span className="overline" style={{ display: "block", marginBottom: 12 }}>ASSIGNMENTS</span>
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {cls.assignments.map((asn, i) => (
-            <Link key={asn.id} href={`/student/courses/${courseId}/classes/${classId}/assignments/${asn.id}`} className="card" style={{ padding: "16px 20px", display: "flex", alignItems: "center", gap: 16, textDecoration: "none", cursor: "pointer" }}>
-              <span style={{ fontFamily: "var(--font-display)", fontSize: 24, fontWeight: 700, color: "var(--accent)", opacity: 0.4, minWidth: 28, lineHeight: 1 }}>{i + 1}</span>
-              <div style={{ flex: 1 }}>
-                <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, color: "var(--text-heading)", marginBottom: 2 }}>{asn.title}</h3>
-                <p style={{ color: "var(--text-secondary)", fontSize: 13, lineHeight: 1.4 }}>{asn.description?.slice(0, 100)}{(asn.description?.length || 0) > 100 ? "..." : ""}</p>
-              </div>
-              <span className="badge badge-neutral" style={{ fontSize: 10 }}>{asn.difficulty}</span>
-              <ArrowRight size={14} color="var(--text-tertiary)" />
-            </Link>
-          ))}
-        </div>
-      </div>
     </div>
   );
 }

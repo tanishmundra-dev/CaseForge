@@ -136,12 +136,30 @@ function QuizView({ assignment, courseId, classId }: { assignment: AssignmentDet
         )}
 
         {/* Questions */}
-        {questions.map((q: any, qi: number) => (
-          <div key={qi} className="card animate-in" style={{ padding: "20px 24px", marginBottom: 16, ...(submitted ? { borderColor: isCorrect(qi) ? "var(--success)" : "var(--danger)", borderWidth: 2 } : {}) }}>
+        {questions.map((q: any, qi: number) => {
+          const wasCorrect = submitted && isCorrect(qi);
+          return (
+          <div key={qi} className="card animate-in" style={{ padding: "20px 24px", marginBottom: 16, ...(submitted ? { borderColor: wasCorrect ? "var(--success)" : "var(--danger)", borderWidth: 2 } : {}) }}>
             <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
               <span style={{ fontFamily: "var(--font-display)", fontSize: 18, fontWeight: 700, color: "var(--accent)", opacity: 0.5, minWidth: 28 }}>{qi + 1}</span>
               <div style={{ flex: 1 }}>
-                <p style={{ fontSize: 15, fontWeight: 500, marginBottom: 14, lineHeight: 1.5 }}>{q.question}</p>
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 14 }}>
+                  <p style={{ flex: 1, fontSize: 15, fontWeight: 500, lineHeight: 1.5 }}>{q.question}</p>
+                  {submitted && (
+                    <span
+                      role="status"
+                      style={{
+                        fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 999,
+                        color: wasCorrect ? "var(--success)" : "var(--danger)",
+                        background: wasCorrect ? "var(--success-bg)" : "var(--danger-bg)",
+                        border: `1px solid ${wasCorrect ? "var(--success)" : "var(--danger)"}33`,
+                        flexShrink: 0, whiteSpace: "nowrap",
+                      }}
+                    >
+                      {wasCorrect ? "✓ Correct" : "✗ Incorrect"}
+                    </span>
+                  )}
+                </div>
 
                 {q.type === "mcq" && (
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -149,6 +167,8 @@ function QuizView({ assignment, courseId, classId }: { assignment: AssignmentDet
                       const selected = answers[qi] === oi;
                       const correct = submitted && oi === q.correct;
                       const wrong = submitted && selected && oi !== q.correct;
+                      const showYourAnswerTag = submitted && selected;
+                      const showCorrectAnswerTag = submitted && oi === q.correct;
                       return (
                         <label
                           key={oi}
@@ -167,7 +187,17 @@ function QuizView({ assignment, courseId, classId }: { assignment: AssignmentDet
                               {selected && <div style={{ width: 10, height: 10, borderRadius: "50%", background: "var(--accent)" }} />}
                             </div>
                           )}
-                          <span style={{ fontSize: 14, color: correct ? "var(--success)" : wrong ? "var(--danger)" : "var(--text-primary)" }}>{opt}</span>
+                          <span style={{ fontSize: 14, color: correct ? "var(--success)" : wrong ? "var(--danger)" : "var(--text-primary)", flex: 1 }}>{opt}</span>
+                          {showYourAnswerTag && (
+                            <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: wrong ? "var(--danger)" : "var(--success)", padding: "2px 8px", border: `1px solid ${wrong ? "var(--danger)" : "var(--success)"}55`, borderRadius: 999, flexShrink: 0 }}>
+                              Your answer
+                            </span>
+                          )}
+                          {showCorrectAnswerTag && !selected && (
+                            <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--success)", padding: "2px 8px", border: "1px solid var(--success)55", borderRadius: 999, flexShrink: 0 }}>
+                              Correct answer
+                            </span>
+                          )}
                         </label>
                       );
                     })}
@@ -182,10 +212,21 @@ function QuizView({ assignment, courseId, classId }: { assignment: AssignmentDet
                       onChange={(e) => setAnswer(qi, e.target.value)}
                       placeholder="Type your answer..."
                       disabled={submitted}
-                      style={{ maxWidth: 400, ...(submitted ? { borderColor: isCorrect(qi) ? "var(--success)" : "var(--danger)" } : {}) }}
+                      style={{ maxWidth: 400, ...(submitted ? { borderColor: wasCorrect ? "var(--success)" : "var(--danger)" } : {}) }}
                     />
-                    {submitted && !isCorrect(qi) && (
-                      <p style={{ fontSize: 12, color: "var(--success)", marginTop: 6 }}>Correct answer: <strong>{q.answer}</strong></p>
+                    {submitted && (
+                      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "6px 12px", marginTop: 10, fontSize: 13 }}>
+                        <span style={{ color: "var(--text-tertiary)", textTransform: "uppercase", fontSize: 10, letterSpacing: "0.08em", alignSelf: "center" }}>Your answer</span>
+                        <span style={{ color: wasCorrect ? "var(--success)" : "var(--danger)", fontWeight: 600 }}>
+                          {answers[qi] ? String(answers[qi]) : <em style={{ fontWeight: 400, opacity: 0.7 }}>— no answer —</em>}
+                        </span>
+                        {!wasCorrect && (
+                          <>
+                            <span style={{ color: "var(--text-tertiary)", textTransform: "uppercase", fontSize: 10, letterSpacing: "0.08em", alignSelf: "center" }}>Correct answer</span>
+                            <span style={{ color: "var(--success)", fontWeight: 600 }}>{q.answer}</span>
+                          </>
+                        )}
+                      </div>
                     )}
                   </div>
                 )}
@@ -196,7 +237,8 @@ function QuizView({ assignment, courseId, classId }: { assignment: AssignmentDet
               </div>
             </div>
           </div>
-        ))}
+          );
+        })}
 
         {/* Submit */}
         {!submitted ? (

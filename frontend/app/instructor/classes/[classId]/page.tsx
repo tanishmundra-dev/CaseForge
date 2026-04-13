@@ -5,7 +5,7 @@ import Link from "next/link";
 import { fetchAPI } from "@/lib/api";
 import {
   ArrowLeft, Plus, Trash2, Save, Code, FileText, FolderOpen,
-  ChevronDown, ChevronRight, Loader2, Check,
+  ChevronDown, ChevronRight, Loader2, Check, Play, Eye, EyeOff, ExternalLink, AlertCircle,
 } from "lucide-react";
 
 interface TestCase { input: string; expected_output: string; description: string; }
@@ -30,17 +30,49 @@ interface Assignment {
   files: FileItem[];
 }
 
+interface LearningUnit {
+  type: string;
+  title: string;
+  duration?: number;
+  content?: string;
+  completion_type?: string;
+  video_url?: string;
+  video_search_query?: string;
+  video_channel?: string;
+  questions?: any[];
+}
+
+interface ResourceLink {
+  type?: string;
+  title: string;
+  url: string;
+  description?: string;
+  channel?: string;
+  source?: string;
+}
+
 interface ClassDetail {
   id: string;
   number: number;
   title: string;
   description: string;
   theory_content?: string;
+  learning_units?: LearningUnit[];
+  resource_links?: ResourceLink[];
   week_number: number;
   week_title: string;
   course_id: string;
   course_title: string;
   assignments: Assignment[];
+}
+
+// Accept full YouTube URL forms: youtube.com/watch?v=, youtu.be/, youtube.com/embed/
+const YOUTUBE_REGEX = /^https?:\/\/(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/;
+
+function extractYouTubeId(url: string): string | null {
+  if (!url) return null;
+  const m = url.match(YOUTUBE_REGEX);
+  return m ? m[1] : null;
 }
 
 export default function ClassEditorPage() {
@@ -59,6 +91,103 @@ export default function ClassEditorPage() {
       .finally(() => setLoading(false));
   };
   useEffect(() => { load(); }, [classId]);
+
+  // ── Class-level edit state (learning units, resources, title/description/theory) ──
+  const [savingClass, setSavingClass] = useState(false);
+  const [classSavedAt, setClassSavedAt] = useState<number | null>(null);
+  const [previewUnit, setPreviewUnit] = useState<number | null>(null);
+  const [expandedUnit, setExpandedUnit] = useState<number | null>(null);
+
+  const updateClassField = (field: "title" | "description" | "theory_content", value: string) => {
+    setCls((p) => p ? { ...p, [field]: value } : p);
+  };
+
+  const updateUnit = (index: number, field: keyof LearningUnit, value: any) => {
+    setCls((p) => {
+      if (!p) return p;
+      const units = [...(p.learning_units || [])];
+      if (!units[index]) return p;
+      units[index] = { ...units[index], [field]: value };
+      return { ...p, learning_units: units };
+    });
+  };
+
+  const moveUnit = (index: number, dir: -1 | 1) => {
+    setCls((p) => {
+      if (!p) return p;
+      const units = [...(p.learning_units || [])];
+      const ni = index + dir;
+      if (ni < 0 || ni >= units.length) return p;
+      [units[index], units[ni]] = [units[ni], units[index]];
+      return { ...p, learning_units: units };
+    });
+    setExpandedUnit((e) => (e === index ? index + dir : e === index + dir ? index : e));
+  };
+
+  const deleteUnit = (index: number) => {
+    if (!confirm("Delete this learning unit? This cannot be undone until you Save.")) return;
+    setCls((p) => {
+      if (!p) return p;
+      const units = (p.learning_units || []).filter((_, i) => i !== index);
+      return { ...p, learning_units: units };
+    });
+    setExpandedUnit(null);
+  };
+
+  const addUnit = (type: "video" | "reading" | "activity" | "quiz") => {
+    const templates: Record<string, LearningUnit> = {
+      video: { type: "video", title: "New Video", duration: 10, content: "", video_url: "", video_channel: "" },
+      reading: { type: "reading", title: "New Reading", duration: 15, content: "## Heading\n\nWrite content here in markdown." },
+      activity: { type: "activity", title: "New Activity", duration: 20, content: "Describe the activity here." },
+      quiz: { type: "quiz", title: "New Quiz", duration: 5, content: "", questions: [{ type: "mcq", question: "Sample question?", options: ["A", "B", "C", "D"], correct: 0, explanation: "" }] },
+    };
+    setCls((p) => {
+      if (!p) return p;
+      const units = [...(p.learning_units || []), templates[type]];
+      return { ...p, learning_units: units };
+    });
+    setExpandedUnit((cls?.learning_units?.length) || 0);
+  };
+
+  // ── Resource links ──
+  const updateResource = (index: number, field: keyof ResourceLink, value: string) => {
+    setCls((p) => {
+      if (!p) return p;
+      const res = [...(p.resource_links || [])];
+      if (!res[index]) return p;
+      res[index] = { ...res[index], [field]: value };
+      return { ...p, resource_links: res };
+    });
+  };
+  const deleteResource = (index: number) => {
+    setCls((p) => p ? { ...p, resource_links: (p.resource_links || []).filter((_, i) => i !== index) } : p);
+  };
+  const addResource = () => {
+    setCls((p) => p ? { ...p, resource_links: [...(p.resource_links || []), { type: "article", title: "", url: "", description: "" }] } : p);
+  };
+
+  const handleSaveClass = async () => {
+    if (!cls) return;
+    setSavingClass(true);
+    try {
+      await fetchAPI(`/instructor/classes/${cls.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          title: cls.title,
+          description: cls.description,
+          theory_content: cls.theory_content || "",
+          learning_units: cls.learning_units || [],
+          resource_links: cls.resource_links || [],
+        }),
+      });
+      setClassSavedAt(Date.now());
+      setTimeout(() => setClassSavedAt((t) => (t && Date.now() - t >= 2500 ? null : t)), 2600);
+    } catch {
+      alert("Failed to save class. Check the console for details.");
+    } finally {
+      setSavingClass(false);
+    }
+  };
 
   const handleSaveAssignment = async (asn: Assignment) => {
     setSaving(asn.id);
@@ -122,13 +251,285 @@ export default function ClassEditorPage() {
         <span className="current">Week {cls.week_number} &middot; Class {cls.number}</span>
       </div>
 
-      {/* Header */}
+      {/* Header — fully editable (title, description, theory_content) */}
       <div className="animate-in animate-in-1" style={{ marginBottom: 32 }}>
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.1em" }}>
-          WEEK {cls.week_number} &middot; CLASS {cls.number}
-        </span>
-        <h1 className="display-heading" style={{ fontSize: 32, marginTop: 8, marginBottom: 8 }}>{cls.title}</h1>
-        <p style={{ color: "var(--text-secondary)", fontSize: 14, lineHeight: 1.6 }}>{cls.description}</p>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.1em" }}>
+            WEEK {cls.week_number} &middot; CLASS {cls.number}
+          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {classSavedAt && (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--success)", fontSize: 12 }}>
+                <Check size={13} /> Saved — students see updates on next load
+              </span>
+            )}
+            <button
+              className="btn-primary"
+              onClick={handleSaveClass}
+              disabled={savingClass}
+              style={{ padding: "8px 16px", fontSize: 13 }}
+            >
+              {savingClass ? <Loader2 size={14} className="animate-pulse-slow" /> : <Save size={14} />}
+              {savingClass ? " Saving..." : " Save Class"}
+            </button>
+          </div>
+        </div>
+
+        <input
+          className="input"
+          value={cls.title}
+          onChange={(e) => updateClassField("title", e.target.value)}
+          placeholder="Class title"
+          style={{ fontFamily: "var(--font-display)", fontSize: 28, fontWeight: 700, padding: "6px 10px", marginBottom: 10, color: "var(--text-heading)", background: "transparent", border: "1px dashed transparent" }}
+          onFocus={(e) => { e.currentTarget.style.borderColor = "var(--border)"; }}
+          onBlur={(e) => { e.currentTarget.style.borderColor = "transparent"; }}
+        />
+
+        <label style={{ fontSize: 11, color: "var(--text-tertiary)", textTransform: "uppercase", display: "block", marginTop: 12, marginBottom: 4 }}>
+          Description (shown on class card)
+        </label>
+        <textarea
+          className="input"
+          value={cls.description}
+          onChange={(e) => updateClassField("description", e.target.value)}
+          rows={2}
+          placeholder="Brief description…"
+          style={{ fontSize: 14, lineHeight: 1.6, resize: "vertical" }}
+        />
+
+        <label style={{ fontSize: 11, color: "var(--text-tertiary)", textTransform: "uppercase", display: "block", marginTop: 16, marginBottom: 4 }}>
+          Theory / Lecture Content (Markdown) — shown when there are no learning units
+        </label>
+        <textarea
+          className="input"
+          value={cls.theory_content || ""}
+          onChange={(e) => updateClassField("theory_content", e.target.value)}
+          rows={6}
+          placeholder="# Heading\n\nTeach the lesson here…"
+          style={{ fontSize: 13, fontFamily: "var(--font-mono)", lineHeight: 1.6, resize: "vertical" }}
+        />
+      </div>
+
+      {/* Learning Units — fully editable (add / delete / reorder / edit all fields) */}
+      <div className="animate-in animate-in-2" style={{ marginBottom: 32 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <span className="overline">LEARNING UNITS ({(cls.learning_units || []).length})</span>
+          <div style={{ display: "flex", gap: 6 }}>
+            {(["video", "reading", "activity", "quiz"] as const).map((t) => (
+              <button key={t} className="btn-secondary" onClick={() => addUnit(t)} style={{ padding: "5px 10px", fontSize: 11 }}>
+                <Plus size={11} /> {t[0].toUpperCase() + t.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {(cls.learning_units || []).length === 0 && (
+          <div style={{ padding: "20px 24px", border: "1px dashed var(--border)", borderRadius: 10, color: "var(--text-tertiary)", fontSize: 13, textAlign: "center" }}>
+            No learning units yet. Add one above, or students will see the Theory Content fallback.
+          </div>
+        )}
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {(cls.learning_units || []).map((unit, ui) => {
+            const videoId = extractYouTubeId(unit.video_url || "");
+            const urlIsInvalid = (unit.video_url || "").length > 0 && !videoId;
+            const isPreview = previewUnit === ui;
+            const isOpen = expandedUnit === ui;
+            const typeColor: Record<string, string> = { video: "#DC2626", reading: "#D97706", activity: "#16A34A", quiz: "#7C3AED" };
+            const color = typeColor[unit.type] || "var(--text-tertiary)";
+            const total = (cls.learning_units || []).length;
+            return (
+              <div key={ui} className="card" style={{ padding: 0, overflow: "hidden" }}>
+                {/* Header row — always visible */}
+                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", background: isOpen ? "var(--bg-secondary)" : "transparent" }}>
+                  <button onClick={() => setExpandedUnit(isOpen ? null : ui)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-tertiary)", padding: 0, display: "flex" }}>
+                    {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  </button>
+                  <select
+                    value={unit.type || "reading"}
+                    onChange={(e) => updateUnit(ui, "type", e.target.value)}
+                    className="input"
+                    style={{ width: 110, fontSize: 11, padding: "4px 8px", color, fontWeight: 700, textTransform: "uppercase" }}
+                  >
+                    <option value="video">Video</option>
+                    <option value="reading">Reading</option>
+                    <option value="activity">Activity</option>
+                    <option value="quiz">Quiz</option>
+                  </select>
+                  <input
+                    className="input"
+                    value={unit.title || ""}
+                    onChange={(e) => updateUnit(ui, "title", e.target.value)}
+                    placeholder="Unit title"
+                    style={{ flex: 1, fontSize: 14, fontWeight: 600 }}
+                  />
+                  <input
+                    className="input"
+                    type="number"
+                    value={unit.duration ?? ""}
+                    onChange={(e) => updateUnit(ui, "duration", parseInt(e.target.value, 10) || 0)}
+                    placeholder="min"
+                    style={{ width: 70, fontSize: 12 }}
+                  />
+                  <button onClick={() => moveUnit(ui, -1)} disabled={ui === 0} title="Move up" style={{ background: "none", border: "1px solid var(--border)", borderRadius: 4, cursor: ui === 0 ? "not-allowed" : "pointer", color: "var(--text-secondary)", padding: "3px 6px", opacity: ui === 0 ? 0.4 : 1 }}>↑</button>
+                  <button onClick={() => moveUnit(ui, 1)} disabled={ui === total - 1} title="Move down" style={{ background: "none", border: "1px solid var(--border)", borderRadius: 4, cursor: ui === total - 1 ? "not-allowed" : "pointer", color: "var(--text-secondary)", padding: "3px 6px", opacity: ui === total - 1 ? 0.4 : 1 }}>↓</button>
+                  <button onClick={() => deleteUnit(ui)} title="Delete unit" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--danger)" }}><Trash2 size={14} /></button>
+                </div>
+
+                {/* Expanded editor */}
+                {isOpen && (
+                  <div style={{ borderTop: "1px solid var(--border)", padding: "14px 16px", background: "var(--bg-secondary)" }}>
+                    {/* YouTube URL + channel + preview */}
+                    <div style={{ display: "flex", alignItems: "stretch", gap: 8, marginBottom: 8 }}>
+                      <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "0 10px", background: "#DC262610", border: "1px solid #DC262620", borderRadius: 6, flexShrink: 0 }}>
+                        <Play size={13} color="#DC2626" />
+                        <span style={{ fontSize: 11, fontWeight: 600, color: "#DC2626" }}>YouTube URL</span>
+                      </div>
+                      <input
+                        className="input"
+                        value={unit.video_url || ""}
+                        onChange={(e) => updateUnit(ui, "video_url", e.target.value)}
+                        placeholder="https://www.youtube.com/watch?v=..."
+                        style={{ flex: 1, fontSize: 12, fontFamily: "var(--font-mono)", borderColor: urlIsInvalid ? "var(--danger)" : undefined }}
+                      />
+                      <input
+                        className="input"
+                        value={unit.video_channel || ""}
+                        onChange={(e) => updateUnit(ui, "video_channel", e.target.value)}
+                        placeholder="Channel"
+                        style={{ width: 160, fontSize: 12 }}
+                      />
+                      <button
+                        className="btn-secondary"
+                        onClick={() => setPreviewUnit(isPreview ? null : ui)}
+                        disabled={!videoId}
+                        title={videoId ? (isPreview ? "Hide preview" : "Preview what students will see") : "Paste a valid YouTube URL to preview"}
+                        style={{ padding: "6px 10px", fontSize: 11 }}
+                      >
+                        {isPreview ? <><EyeOff size={12} /> Hide</> : <><Eye size={12} /> Preview</>}
+                      </button>
+                      {videoId && (
+                        <a href={`https://www.youtube.com/watch?v=${videoId}`} target="_blank" rel="noreferrer" className="btn-secondary" style={{ padding: "6px 10px", fontSize: 11, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                          Open <ExternalLink size={11} />
+                        </a>
+                      )}
+                    </div>
+
+                    {urlIsInvalid && (
+                      <div style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--danger)", marginBottom: 8 }}>
+                        <AlertCircle size={13} /> Not a valid YouTube URL. Use youtube.com/watch?v=… or youtu.be/…
+                      </div>
+                    )}
+
+                    {isPreview && videoId && (
+                      <div style={{ marginBottom: 12, border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 12px", background: "var(--bg-tertiary)", borderBottom: "1px solid var(--border)" }}>
+                          <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-tertiary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Student Preview</span>
+                          <span style={{ fontSize: 11, color: "var(--text-tertiary)", fontFamily: "var(--font-mono)" }}>youtube.com/watch?v={videoId}</span>
+                        </div>
+                        <div style={{ position: "relative", paddingBottom: "56.25%", height: 0 }}>
+                          <iframe src={`https://www.youtube.com/embed/${videoId}?rel=0`} title={`Preview: ${unit.title || videoId}`} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: 0 }} />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Unit content body (markdown) — hidden for quiz, optional for others */}
+                    {unit.type !== "quiz" && (
+                      <>
+                        <label style={{ fontSize: 11, color: "var(--text-tertiary)", textTransform: "uppercase", display: "block", marginBottom: 4 }}>Content (Markdown)</label>
+                        <textarea
+                          className="input"
+                          value={unit.content || ""}
+                          onChange={(e) => updateUnit(ui, "content", e.target.value)}
+                          rows={8}
+                          placeholder={"## Heading\n\nWrite the unit content in markdown. Supports ```code```, `inline`, **bold**, *italic*, - bullets."}
+                          style={{ fontSize: 13, fontFamily: "var(--font-mono)", lineHeight: 1.6, resize: "vertical" }}
+                        />
+                      </>
+                    )}
+
+                    {/* Quiz unit editor */}
+                    {unit.type === "quiz" && (
+                      <div>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                          <label style={{ fontSize: 11, color: "var(--text-tertiary)", textTransform: "uppercase" }}>Questions ({(unit.questions || []).length})</label>
+                          <button
+                            className="btn-secondary"
+                            onClick={() => updateUnit(ui, "questions", [...(unit.questions || []), { type: "mcq", question: "", options: ["", "", "", ""], correct: 0, explanation: "" }])}
+                            style={{ fontSize: 11, padding: "3px 8px" }}
+                          >
+                            <Plus size={11} /> Question
+                          </button>
+                        </div>
+                        {(unit.questions || []).map((q: any, qi: number) => (
+                          <div key={qi} style={{ padding: "10px 12px", background: "var(--bg-tertiary)", borderRadius: 8, marginBottom: 8, border: "1px solid var(--border)" }}>
+                            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
+                              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)" }}>Q{qi + 1}</span>
+                              <select
+                                className="input"
+                                value={q.type || "mcq"}
+                                onChange={(e) => { const qs = [...(unit.questions || [])]; qs[qi] = { ...qs[qi], type: e.target.value }; updateUnit(ui, "questions", qs); }}
+                                style={{ width: 100, fontSize: 11, padding: "4px 8px" }}
+                              >
+                                <option value="mcq">MCQ</option>
+                                <option value="fill_up">Fill Up</option>
+                              </select>
+                              <div style={{ flex: 1 }} />
+                              <button onClick={() => { const qs = (unit.questions || []).filter((_: any, j: number) => j !== qi); updateUnit(ui, "questions", qs); }} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--danger)" }}><Trash2 size={12} /></button>
+                            </div>
+                            <input className="input" value={q.question || ""} placeholder="Question text" onChange={(e) => { const qs = [...(unit.questions || [])]; qs[qi] = { ...qs[qi], question: e.target.value }; updateUnit(ui, "questions", qs); }} style={{ marginBottom: 6, fontSize: 13 }} />
+                            {q.type === "mcq" && (
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+                                {(q.options || []).map((opt: string, oi: number) => (
+                                  <div key={oi} style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                                    <input type="radio" name={`u${ui}-q${qi}-correct`} checked={q.correct === oi} onChange={() => { const qs = [...(unit.questions || [])]; qs[qi] = { ...qs[qi], correct: oi }; updateUnit(ui, "questions", qs); }} />
+                                    <input className="input" value={opt} onChange={(e) => { const qs = [...(unit.questions || [])]; const opts = [...(qs[qi].options || [])]; opts[oi] = e.target.value; qs[qi] = { ...qs[qi], options: opts }; updateUnit(ui, "questions", qs); }} style={{ fontSize: 12, flex: 1 }} />
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            {q.type === "fill_up" && (
+                              <input className="input" value={q.answer || ""} placeholder="Correct answer" onChange={(e) => { const qs = [...(unit.questions || [])]; qs[qi] = { ...qs[qi], answer: e.target.value }; updateUnit(ui, "questions", qs); }} style={{ fontSize: 12, marginTop: 4 }} />
+                            )}
+                            <input className="input" value={q.explanation || ""} placeholder="Explanation (shown after submit)" onChange={(e) => { const qs = [...(unit.questions || [])]; qs[qi] = { ...qs[qi], explanation: e.target.value }; updateUnit(ui, "questions", qs); }} style={{ fontSize: 12, marginTop: 4 }} />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Resource Links / References */}
+      <div className="animate-in animate-in-2" style={{ marginBottom: 32 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <span className="overline">RESOURCES &amp; REFERENCES ({(cls.resource_links || []).length})</span>
+          <button className="btn-secondary" onClick={addResource} style={{ padding: "5px 10px", fontSize: 11 }}>
+            <Plus size={11} /> Add Resource
+          </button>
+        </div>
+        {(cls.resource_links || []).length === 0 && (
+          <div style={{ padding: "16px 20px", border: "1px dashed var(--border)", borderRadius: 10, color: "var(--text-tertiary)", fontSize: 13, textAlign: "center" }}>
+            No resources linked to this class.
+          </div>
+        )}
+        {(cls.resource_links || []).map((res, ri) => (
+          <div key={ri} className="card" style={{ padding: "10px 12px", marginBottom: 8, display: "grid", gridTemplateColumns: "120px 1fr 2fr auto", gap: 8, alignItems: "center" }}>
+            <select className="input" value={res.type || "article"} onChange={(e) => updateResource(ri, "type", e.target.value)} style={{ fontSize: 12, padding: "4px 8px" }}>
+              <option value="video">Video</option>
+              <option value="article">Article</option>
+              <option value="docs">Docs</option>
+              <option value="other">Other</option>
+            </select>
+            <input className="input" value={res.title} onChange={(e) => updateResource(ri, "title", e.target.value)} placeholder="Title" style={{ fontSize: 13 }} />
+            <input className="input" value={res.url} onChange={(e) => updateResource(ri, "url", e.target.value)} placeholder="https://…" style={{ fontSize: 12, fontFamily: "var(--font-mono)" }} />
+            <button onClick={() => deleteResource(ri)} title="Delete" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--danger)" }}><Trash2 size={13} /></button>
+          </div>
+        ))}
       </div>
 
       {/* Assignments */}

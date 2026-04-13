@@ -5,8 +5,22 @@ import { fetchAPI } from "@/lib/api";
 import {
   Send, Sparkles, Code, FileText, Pencil, Check, X, Save, Upload,
   ChevronDown, ChevronRight, BookOpen, ExternalLink, Loader2,
-  Paperclip,
+  Paperclip, Plus, Trash2, ArrowUp, ArrowDown, Link2, Video,
 } from "lucide-react";
+
+const YOUTUBE_REGEX = /(?:youtube\.com\/(?:watch\?v=|embed\/)|youtu\.be\/)([\w-]{11})/;
+const extractYouTubeId = (url: string): string | null => {
+  if (!url) return null;
+  const m = url.match(YOUTUBE_REGEX);
+  return m ? m[1] : null;
+};
+
+const UNIT_TEMPLATES: Record<string, LearningUnit> = {
+  video: { type: "video", title: "New Video", duration: 10, content: "", video_search_query: "" },
+  reading: { type: "reading", title: "New Reading", duration: 8, content: "" },
+  activity: { type: "activity", title: "New Activity", duration: 15, content: "" },
+  quiz: { type: "quiz", title: "Knowledge Check", duration: 5, content: "", questions: [] },
+};
 
 const API = "http://localhost:8000/api";
 
@@ -223,12 +237,14 @@ function MissionControlInner() {
   const applyModification = (mod: any) => {
     console.log("MODIFY received:", JSON.stringify({ action: mod.action, level: mod.level, week: mod.week, class: mod.class, assignment_index: mod.assignment_index, hasData: !!mod.data }));
     if (!course) { console.log("MODIFY SKIP: no course"); return; }
-    if (!mod.data) { console.log("MODIFY SKIP: no data in response"); return; }
+    // delete_* levels don't carry data — allow them through
+    const isDelete = mod.level === "delete_week" || mod.level === "delete_class";
+    if (!mod.data && !isDelete) { console.log("MODIFY SKIP: no data in response"); return; }
     setSaved(null);
 
     let level = mod.level;
-    if (level === "class" && mod.data.classes) level = "week";
-    if (level === "week" && !mod.data.classes && mod.data.assignments) level = "class";
+    if (level === "class" && mod.data?.classes) level = "week";
+    if (level === "week" && mod.data && !mod.data.classes && mod.data.assignments) level = "class";
     console.log("MODIFY level:", level, "| course weeks:", course.weeks.map((w) => w.number));
 
     setCourse((prev) => {
@@ -327,6 +343,66 @@ function MissionControlInner() {
               setExpandedWeeks((p) => new Set([...p, mod.week]));
               setExpandedClasses((p) => new Set([...p, `${mod.week}-${mod.class}`]));
             }
+          }
+          break;
+        }
+        case "add_week": {
+          const newWeek: Week = {
+            ...mod.data,
+            number: u.weeks.length + 1,
+            title: mod.data.title || `Week ${u.weeks.length + 1}`,
+            classes: (mod.data.classes || []).map((cls: any, i: number) => ({
+              ...cls,
+              number: i + 1,
+              learning_units: cls.learning_units || [],
+              assignments: (cls.assignments || []).map((a: any) => normalizeAssignment(a)),
+            })),
+          };
+          u.weeks = [...u.weeks, newWeek];
+          setModifiedKey(`w-${newWeek.number}`);
+          setExpandedWeeks((p) => new Set([...p, newWeek.number]));
+          newWeek.classes.forEach((cl) => {
+            setExpandedClasses((p) => new Set([...p, `${newWeek.number}-${cl.number}`]));
+          });
+          break;
+        }
+        case "add_class": {
+          const wi = u.weeks.findIndex((w) => w.number === mod.week);
+          if (wi >= 0) {
+            const existingClasses = u.weeks[wi].classes;
+            const newClass: ClassItem = {
+              ...mod.data,
+              number: existingClasses.length + 1,
+              title: mod.data.title || `Class ${existingClasses.length + 1}`,
+              description: mod.data.description || "",
+              learning_units: mod.data.learning_units || [],
+              assignments: (mod.data.assignments || []).map((a: any) => normalizeAssignment(a)),
+            };
+            u.weeks[wi] = { ...u.weeks[wi], classes: [...existingClasses, newClass] };
+            setModifiedKey(`c-${mod.week}-${newClass.number}`);
+            setExpandedWeeks((p) => new Set([...p, mod.week]));
+            setExpandedClasses((p) => new Set([...p, `${mod.week}-${newClass.number}`]));
+          }
+          break;
+        }
+        case "delete_week": {
+          const targetNum = mod.week;
+          u.weeks = u.weeks
+            .filter((w) => w.number !== targetNum)
+            .map((w, i) => ({ ...w, number: i + 1 }));
+          setModifiedKey("meta");
+          break;
+        }
+        case "delete_class": {
+          const wi = u.weeks.findIndex((w) => w.number === mod.week);
+          if (wi >= 0) {
+            const targetClassNum = mod.class;
+            const remaining = u.weeks[wi].classes
+              .filter((c) => c.number !== targetClassNum)
+              .map((c, i) => ({ ...c, number: i + 1 }));
+            u.weeks[wi] = { ...u.weeks[wi], classes: remaining };
+            setModifiedKey(`w-${mod.week}`);
+            setExpandedWeeks((p) => new Set([...p, mod.week]));
           }
           break;
         }
@@ -565,6 +641,85 @@ function MissionControlInner() {
   };
 
   /* ══════════════════════════════════════════════
+     DIRECT MUTATIONS — learning units & resources
+     ══════════════════════════════════════════════ */
+  const mutateClass = (weekNum: number, classNum: number, fn: (c: ClassItem) => ClassItem) => {
+    setSaved(null);
+    setCourse((p) => {
+      if (!p) return p;
+      return {
+        ...p,
+        weeks: p.weeks.map((w) => w.number !== weekNum ? w : {
+          ...w,
+          classes: w.classes.map((c) => c.number !== classNum ? c : fn({ ...c })),
+        }),
+      };
+    });
+  };
+
+  const patchUnit = (weekNum: number, classNum: number, idx: number, patch: Partial<LearningUnit>) => {
+    mutateClass(weekNum, classNum, (c) => {
+      const units = [...(c.learning_units || [])];
+      if (units[idx]) units[idx] = { ...units[idx], ...patch };
+      return { ...c, learning_units: units };
+    });
+  };
+
+  const addUnit = (weekNum: number, classNum: number, type: string) => {
+    mutateClass(weekNum, classNum, (c) => ({
+      ...c,
+      learning_units: [...(c.learning_units || []), { ...UNIT_TEMPLATES[type] }],
+    }));
+    setExpandedTheory((p) => new Set([...p, `${weekNum}-${classNum}`]));
+  };
+
+  const deleteUnit = (weekNum: number, classNum: number, idx: number) => {
+    if (!confirm("Delete this learning unit?")) return;
+    mutateClass(weekNum, classNum, (c) => ({
+      ...c,
+      learning_units: (c.learning_units || []).filter((_, i) => i !== idx),
+    }));
+  };
+
+  const moveUnit = (weekNum: number, classNum: number, idx: number, dir: -1 | 1) => {
+    mutateClass(weekNum, classNum, (c) => {
+      const units = [...(c.learning_units || [])];
+      const target = idx + dir;
+      if (target < 0 || target >= units.length) return c;
+      [units[idx], units[target]] = [units[target], units[idx]];
+      return { ...c, learning_units: units };
+    });
+  };
+
+  const patchResource = (weekNum: number, classNum: number, idx: number, patch: Partial<ResourceLink>) => {
+    mutateClass(weekNum, classNum, (c) => {
+      const list = [...(c.resource_links || c.resources || [])];
+      if (list[idx]) list[idx] = { ...list[idx], ...patch };
+      return { ...c, resource_links: list };
+    });
+  };
+
+  const addResource = (weekNum: number, classNum: number) => {
+    mutateClass(weekNum, classNum, (c) => ({
+      ...c,
+      resource_links: [...(c.resource_links || c.resources || []), { type: "article", title: "New Resource", url: "" }],
+    }));
+  };
+
+  const deleteResource = (weekNum: number, classNum: number, idx: number) => {
+    if (!confirm("Delete this resource?")) return;
+    mutateClass(weekNum, classNum, (c) => ({
+      ...c,
+      resource_links: (c.resource_links || c.resources || []).filter((_, i) => i !== idx),
+    }));
+  };
+
+  const patchMeta = (patch: Partial<CourseState>) => {
+    setSaved(null);
+    setCourse((p) => p ? { ...p, ...patch } : p);
+  };
+
+  /* ══════════════════════════════════════════════
      SAVE / PUBLISH
      ══════════════════════════════════════════════ */
   const handleSave = async (status: "draft" | "published") => {
@@ -602,12 +757,16 @@ function MissionControlInner() {
     return <Tag className={className} style={{ ...style, cursor: "pointer" }} onClick={(e: any) => { e.stopPropagation(); startEdit(id, val); }} title="Click to edit">{val}<Pencil size={10} style={{ marginLeft: 4, opacity: 0.2, verticalAlign: "middle" }} /></Tag>;
   };
 
-  const UnitPreview = ({ unit, index, weekNumber, classNumber, unitIcons, unitColors }: { unit: any; index: number; weekNumber: number; classNumber: number; unitIcons: Record<string, string>; unitColors: Record<string, string> }) => {
+  const UnitPreview = ({ unit, index, weekNumber, classNumber, unitIcons, unitColors, totalUnits }: { unit: any; index: number; weekNumber: number; classNumber: number; unitIcons: Record<string, string>; unitColors: Record<string, string>; totalUnits: number }) => {
     const [open, setOpen] = useState(false);
+    const [showPreview, setShowPreview] = useState(true);
     const titleFieldId = `lu-title.${weekNumber}.${classNumber}.${index}`;
     const durationFieldId = `lu-duration.${weekNumber}.${classNumber}.${index}`;
     const contentFieldId = `lu-content.${weekNumber}.${classNumber}.${index}`;
     const isEditingContent = editField === contentFieldId;
+    const videoUrl: string = unit.video_url || "";
+    const ytId = extractYouTubeId(videoUrl);
+    const urlInvalid = videoUrl.trim() && !ytId;
     return (
       <div style={{ borderBottom: "1px solid var(--border)" }}>
         <div onClick={() => setOpen(!open)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", cursor: "pointer", background: open ? "var(--bg-secondary)" : "var(--bg-primary)" }}>
@@ -617,11 +776,44 @@ function MissionControlInner() {
           <div style={{ flex: 1, minWidth: 0 }} onClick={(e) => e.stopPropagation()}>
             <Editable id={titleFieldId} val={unit.title || ""} style={{ fontSize: 12, fontWeight: 600, color: "var(--text-heading)" }} />
           </div>
-          <span style={{ fontSize: 10, color: "var(--text-tertiary)", fontFamily: "var(--font-mono)", textTransform: "uppercase", flexShrink: 0 }}>{unit.type}</span>
+          <select
+            value={unit.type || "video"}
+            onChange={(e) => patchUnit(weekNumber, classNumber, index, { type: e.target.value })}
+            onClick={(e) => e.stopPropagation()}
+            style={{ fontSize: 10, fontFamily: "var(--font-mono)", textTransform: "uppercase", background: "var(--bg-tertiary)", border: "1px solid var(--border)", borderRadius: 4, padding: "2px 4px", color: "var(--text-tertiary)", cursor: "pointer" }}
+          >
+            <option value="video">video</option>
+            <option value="reading">reading</option>
+            <option value="activity">activity</option>
+            <option value="quiz">quiz</option>
+          </select>
           <span onClick={(e) => e.stopPropagation()} style={{ display: "inline-flex", alignItems: "center", flexShrink: 0 }}>
             <Editable id={durationFieldId} val={String(unit.duration ?? "")} style={{ fontSize: 10, color: "var(--text-tertiary)", fontFamily: "var(--font-mono)" }} />
             <span style={{ fontSize: 10, color: "var(--text-tertiary)", fontFamily: "var(--font-mono)" }}>m</span>
           </span>
+          <button
+            onClick={(e) => { e.stopPropagation(); moveUnit(weekNumber, classNumber, index, -1); }}
+            disabled={index === 0}
+            title="Move up"
+            style={{ background: "none", border: "none", cursor: index === 0 ? "not-allowed" : "pointer", color: "var(--text-tertiary)", padding: 2, opacity: index === 0 ? 0.3 : 1 }}
+          >
+            <ArrowUp size={11} />
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); moveUnit(weekNumber, classNumber, index, 1); }}
+            disabled={index === totalUnits - 1}
+            title="Move down"
+            style={{ background: "none", border: "none", cursor: index === totalUnits - 1 ? "not-allowed" : "pointer", color: "var(--text-tertiary)", padding: 2, opacity: index === totalUnits - 1 ? 0.3 : 1 }}
+          >
+            <ArrowDown size={11} />
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); deleteUnit(weekNumber, classNumber, index); }}
+            title="Delete unit"
+            style={{ background: "none", border: "none", cursor: "pointer", color: "var(--danger, #dc2626)", padding: 2 }}
+          >
+            <Trash2 size={11} />
+          </button>
           {open ? <ChevronDown size={12} color="var(--text-tertiary)" /> : <ChevronRight size={12} color="var(--text-tertiary)" />}
         </div>
         {open && isEditingContent && (
@@ -672,16 +864,65 @@ function MissionControlInner() {
                 .replace(/\n\n/g, '<br/><br/>')
               }}
             />
-            {(unit.video_search_query || unit.video_url) && (() => {
-              const query = unit.video_search_query || unit.title || "";
-              return (
-                <a href={`https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`} target="_blank" rel="noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 8, padding: "6px 12px", background: "#DC262610", borderRadius: 6, border: "1px solid #DC262618", textDecoration: "none" }}>
-                  <span style={{ fontSize: 14 }}>▶</span>
-                  <span style={{ fontSize: 11, fontWeight: 600, color: "#DC2626" }}>{unit.video_channel || "YouTube"}</span>
-                  <ExternalLink size={9} color="var(--text-tertiary)" />
-                </a>
-              );
-            })()}
+            {unit.type === "video" && (
+              <div style={{ marginTop: 12, padding: 10, background: "var(--bg-tertiary)", borderRadius: 6, border: "1px solid var(--border)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                  <Video size={12} color="#DC2626" />
+                  <span style={{ fontSize: 10, fontWeight: 600, color: "var(--text-tertiary)", textTransform: "uppercase" }}>YouTube</span>
+                  {videoUrl && !urlInvalid && (
+                    <button
+                      onClick={() => setShowPreview((s) => !s)}
+                      className="btn"
+                      style={{ marginLeft: "auto", fontSize: 10, padding: "2px 8px" }}
+                    >
+                      {showPreview ? "Hide preview" : "Show preview"}
+                    </button>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6 }}>
+                  <Link2 size={11} color="var(--text-tertiary)" />
+                  <input
+                    type="url"
+                    className="input"
+                    placeholder="https://www.youtube.com/watch?v=..."
+                    value={videoUrl}
+                    onChange={(e) => patchUnit(weekNumber, classNumber, index, { video_url: e.target.value } as Partial<LearningUnit>)}
+                    style={{ flex: 1, fontSize: 11, padding: "4px 8px", fontFamily: "var(--font-mono)" }}
+                  />
+                  {videoUrl && !urlInvalid && (
+                    <a href={videoUrl} target="_blank" rel="noreferrer" title="Open in YouTube" style={{ color: "var(--text-tertiary)", display: "flex" }}>
+                      <ExternalLink size={11} />
+                    </a>
+                  )}
+                </div>
+                {urlInvalid && (
+                  <div style={{ fontSize: 10, color: "var(--danger, #dc2626)", marginBottom: 6 }}>
+                    Not a valid YouTube URL (expected youtube.com/watch?v=... or youtu.be/...)
+                  </div>
+                )}
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <span style={{ fontSize: 10, color: "var(--text-tertiary)", minWidth: 50 }}>Channel:</span>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="Channel name"
+                    value={unit.video_channel || ""}
+                    onChange={(e) => patchUnit(weekNumber, classNumber, index, { video_channel: e.target.value } as Partial<LearningUnit>)}
+                    style={{ flex: 1, fontSize: 11, padding: "4px 8px" }}
+                  />
+                </div>
+                {ytId && showPreview && (
+                  <div style={{ marginTop: 8, position: "relative", width: "100%", paddingBottom: "56.25%", height: 0, borderRadius: 6, overflow: "hidden", background: "#000" }}>
+                    <iframe
+                      src={`https://www.youtube.com/embed/${ytId}`}
+                      title="YouTube preview"
+                      allowFullScreen
+                      style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: 0 }}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -717,8 +958,18 @@ function MissionControlInner() {
             {/* Meta */}
             <div className="animate-in" style={{ marginBottom: 28, borderRadius: 8, padding: isModified("meta") ? 12 : 0, ...glow(isModified("meta")) }}>
               <Editable id="title" val={course.title} as="h1" className="display-heading" style={{ fontSize: 28, marginBottom: 10 }} />
-              <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-                <span className="badge badge-neutral">{course.difficulty}</span>
+              <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+                <select
+                  value={course.difficulty}
+                  onChange={(e) => patchMeta({ difficulty: e.target.value })}
+                  className="input"
+                  style={{ fontSize: 11, padding: "2px 6px", height: 22, width: "auto", fontFamily: "var(--font-mono)", textTransform: "uppercase" }}
+                  title="Change difficulty"
+                >
+                  <option value="Beginner">Beginner</option>
+                  <option value="Intermediate">Intermediate</option>
+                  <option value="Advanced">Advanced</option>
+                </select>
                 {isStreaming && <span className="badge badge-accent animate-pulse-slow">GENERATING...</span>}
                 {saved && <span className={`badge ${saved === "published" ? "badge-success" : "badge-warning"}`}>{saved.toUpperCase()}</span>}
                 {!saved && !isStreaming && course.weeks.length > 0 && <span className="badge badge-danger" style={{ fontSize: 10 }}>UNSAVED</span>}
@@ -750,25 +1001,65 @@ function MissionControlInner() {
                               <span style={{ fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 700, color: "var(--accent)", opacity: 0.35, minWidth: 24 }}>{cls.number}</span>
                               <div style={{ flex: 1 }}><Editable id={`ct.${week.number}.${cls.number}`} val={cls.title} as="h4" style={{ fontSize: 14, fontWeight: 600 }} /></div>
                               <div style={{ display: "flex", gap: 4 }}>
-                                {cls.assignments.map((a, i) => <span key={i} className={`badge ${typeBadge(a.type)}`} style={{ fontSize: 10, padding: "2px 6px" }}>{typeLabel(a.type)}</span>)}
+                                {Array.from(new Set(cls.assignments.map((a) => a.type))).map((t) => <span key={t} className={`badge ${typeBadge(t)}`} style={{ fontSize: 10, padding: "2px 6px" }}>{typeLabel(t)}</span>)}
                               </div>
                             </div>
 
                             {cOpen && (
                               <div style={{ borderTop: "1px solid var(--border)", padding: "16px 18px" }}>
                                 {/* Description / Lecture Notes */}
-                                {cls.description && cls.description.length > 150 ? (
-                                  <div style={{ marginBottom: 16, padding: "12px 16px", background: "var(--bg-secondary)", borderRadius: 8, border: "1px solid var(--border)" }}>
-                                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-                                      <BookOpen size={12} color="var(--text-tertiary)" />
-                                      <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-tertiary)", textTransform: "uppercase" }}>Lecture Notes</span>
-                                      <Pencil size={10} style={{ marginLeft: "auto", opacity: 0.3, cursor: "pointer" }} onClick={() => startEdit(`cd.${week.number}.${cls.number}`, cls.description)} />
-                                    </div>
-                                    <p style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{cls.description}</p>
-                                  </div>
-                                ) : (
-                                  <Editable id={`cd.${week.number}.${cls.number}`} val={cls.description || ""} as="p" style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6, marginBottom: 16 }} />
-                                )}
+                                {(() => {
+                                  const fieldId = `cd.${week.number}.${cls.number}`;
+                                  const isEditing = editField === fieldId;
+                                  const isLong = (cls.description || "").length > 150;
+                                  if (isLong || isEditing) {
+                                    return (
+                                      <div style={{ marginBottom: 16, padding: "12px 16px", background: "var(--bg-secondary)", borderRadius: 8, border: `1px solid ${isEditing ? "var(--accent)" : "var(--border)"}` }}>
+                                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                                          <BookOpen size={12} color="var(--text-tertiary)" />
+                                          <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-tertiary)", textTransform: "uppercase" }}>Lecture Notes</span>
+                                          {!isEditing && (
+                                            <button
+                                              className="btn"
+                                              onClick={() => startEdit(fieldId, cls.description || "")}
+                                              style={{ marginLeft: "auto", fontSize: 10, padding: "3px 8px", display: "inline-flex", alignItems: "center", gap: 4 }}
+                                              title="Edit lecture notes"
+                                            >
+                                              <Pencil size={10} /> Edit
+                                            </button>
+                                          )}
+                                        </div>
+                                        {isEditing ? (
+                                          <>
+                                            <textarea
+                                              className="input"
+                                              value={editVal}
+                                              onChange={(e) => setEditVal(e.target.value)}
+                                              autoFocus
+                                              rows={10}
+                                              style={{ width: "100%", fontSize: 13, lineHeight: 1.7, padding: "10px 12px", resize: "vertical", fontFamily: "inherit" }}
+                                              onKeyDown={(e) => {
+                                                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); confirmEdit(); }
+                                                if (e.key === "Escape") cancelEdit();
+                                              }}
+                                            />
+                                            <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                                              <button onClick={confirmEdit} className="btn" style={{ fontSize: 11, padding: "4px 10px", background: "var(--success)", color: "#fff" }}>
+                                                <Check size={11} /> Save (Ctrl+Enter)
+                                              </button>
+                                              <button onClick={cancelEdit} className="btn" style={{ fontSize: 11, padding: "4px 10px" }}>
+                                                <X size={11} /> Cancel
+                                              </button>
+                                            </div>
+                                          </>
+                                        ) : (
+                                          <p style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.7, whiteSpace: "pre-wrap", cursor: "pointer" }} onClick={() => startEdit(fieldId, cls.description || "")} title="Click to edit">{cls.description}</p>
+                                        )}
+                                      </div>
+                                    );
+                                  }
+                                  return <Editable id={fieldId} val={cls.description || ""} as="p" style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6, marginBottom: 16 }} />;
+                                })()}
 
                                 {/* Learning Units (Coursera-style) */}
                                 {cls.learning_units && cls.learning_units.length > 0 ? (() => {
@@ -791,8 +1082,20 @@ function MissionControlInner() {
                                     {tOpen && (
                                       <div style={{ border: "1px solid var(--border)", borderTop: "none", borderRadius: "0 0 8px 8px", overflow: "hidden" }}>
                                         {cls.learning_units.map((unit: any, ui: number) => (
-                                          <UnitPreview key={ui} unit={unit} index={ui} weekNumber={week.number} classNumber={cls.number} unitIcons={unitIcons} unitColors={unitColors} />
+                                          <UnitPreview key={ui} unit={unit} index={ui} weekNumber={week.number} classNumber={cls.number} unitIcons={unitIcons} unitColors={unitColors} totalUnits={cls.learning_units!.length} />
                                         ))}
+                                        <div style={{ display: "flex", gap: 6, padding: "8px 10px", background: "var(--bg-secondary)", flexWrap: "wrap" }}>
+                                          {(["video","reading","activity","quiz"] as const).map((t) => (
+                                            <button
+                                              key={t}
+                                              className="btn"
+                                              onClick={() => addUnit(week.number, cls.number, t)}
+                                              style={{ fontSize: 10, padding: "4px 8px", display: "inline-flex", alignItems: "center", gap: 4 }}
+                                            >
+                                              <Plus size={10} /> {unitIcons[t]} {t}
+                                            </button>
+                                          ))}
+                                        </div>
                                       </div>
                                     )}
                                   </div>
@@ -848,7 +1151,7 @@ function MissionControlInner() {
                                     ))}
 
                                     {/* Quiz: questions */}
-                                    {asn.type === "objective" && asn.questions?.length > 0 && (
+                                    {asn.type === "objective" && (asn.questions?.length ?? 0) > 0 && asn.questions && (
                                       <div>
                                         <span style={{ fontSize: 10, fontWeight: 600, color: "var(--text-tertiary)", textTransform: "uppercase" }}>{asn.questions.length} Questions</span>
                                         {asn.questions.map((q: any, qi: number) => (
@@ -860,24 +1163,78 @@ function MissionControlInner() {
                                     )}
 
                                     {/* Hints */}
-                                    {asn.hints?.length > 0 && (
+                                    {(asn.hints?.length ?? 0) > 0 && asn.hints && (
                                       <p style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 6 }}><strong>Hints:</strong> {asn.hints.join(" • ")}</p>
                                     )}
                                   </div>
                                 ))}
 
-                                {/* References */}
-                                {cls.references && cls.references.length > 0 && (
-                                  <div style={{ marginTop: 10, padding: "10px 14px", background: "var(--accent-subtle)", borderRadius: 8 }}>
-                                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}><BookOpen size={12} color="var(--accent)" /><span style={{ fontSize: 10, fontWeight: 600, color: "var(--accent)", textTransform: "uppercase" }}>References</span></div>
-                                    {cls.references.map((ref, ri) => (
-                                      <div key={ri} style={{ marginBottom: 4 }}>
-                                        <a href={ref.url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "var(--accent)", fontWeight: 500 }}>{ref.title} <ExternalLink size={9} style={{ verticalAlign: "middle" }} /></a>
-                                        {ref.description && <p style={{ fontSize: 11, color: "var(--text-tertiary)" }}>{ref.description}</p>}
+                                {/* Resources (editable) */}
+                                {(() => {
+                                  const resources = cls.resource_links || cls.resources || [];
+                                  return (
+                                    <div style={{ marginTop: 10, padding: "10px 14px", background: "var(--accent-subtle)", borderRadius: 8 }}>
+                                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                                        <BookOpen size={12} color="var(--accent)" />
+                                        <span style={{ fontSize: 10, fontWeight: 600, color: "var(--accent)", textTransform: "uppercase", flex: 1 }}>Resources &amp; References</span>
+                                        <button
+                                          className="btn"
+                                          onClick={() => addResource(week.number, cls.number)}
+                                          style={{ fontSize: 10, padding: "3px 8px", display: "inline-flex", alignItems: "center", gap: 4 }}
+                                        >
+                                          <Plus size={10} /> Add
+                                        </button>
                                       </div>
-                                    ))}
-                                  </div>
-                                )}
+                                      {resources.length === 0 ? (
+                                        <div style={{ fontSize: 11, color: "var(--text-tertiary)", fontStyle: "italic" }}>No resources yet — click &ldquo;Add&rdquo; to attach one.</div>
+                                      ) : (
+                                        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                                          {resources.map((ref: ResourceLink, ri: number) => (
+                                            <div key={ri} style={{ display: "flex", gap: 6, alignItems: "center", padding: "6px 8px", background: "var(--bg-primary)", borderRadius: 6, border: "1px solid var(--border)" }}>
+                                              <select
+                                                value={ref.type || "article"}
+                                                onChange={(e) => patchResource(week.number, cls.number, ri, { type: e.target.value })}
+                                                style={{ fontSize: 10, padding: "2px 4px", background: "var(--bg-tertiary)", border: "1px solid var(--border)", borderRadius: 4, fontFamily: "var(--font-mono)", textTransform: "uppercase" }}
+                                              >
+                                                <option value="article">article</option>
+                                                <option value="video">video</option>
+                                                <option value="docs">docs</option>
+                                                <option value="other">other</option>
+                                              </select>
+                                              <input
+                                                className="input"
+                                                placeholder="Title"
+                                                value={ref.title || ""}
+                                                onChange={(e) => patchResource(week.number, cls.number, ri, { title: e.target.value })}
+                                                style={{ flex: 1, fontSize: 11, padding: "3px 6px" }}
+                                              />
+                                              <input
+                                                className="input"
+                                                type="url"
+                                                placeholder="https://..."
+                                                value={ref.url || ""}
+                                                onChange={(e) => patchResource(week.number, cls.number, ri, { url: e.target.value })}
+                                                style={{ flex: 2, fontSize: 11, padding: "3px 6px", fontFamily: "var(--font-mono)" }}
+                                              />
+                                              {ref.url && (
+                                                <a href={ref.url} target="_blank" rel="noreferrer" title="Open" style={{ color: "var(--text-tertiary)", display: "flex" }}>
+                                                  <ExternalLink size={11} />
+                                                </a>
+                                              )}
+                                              <button
+                                                onClick={() => deleteResource(week.number, cls.number, ri)}
+                                                title="Delete resource"
+                                                style={{ background: "none", border: "none", cursor: "pointer", color: "var(--danger, #dc2626)", padding: 2 }}
+                                              >
+                                                <Trash2 size={11} />
+                                              </button>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
                               </div>
                             )}
                           </div>

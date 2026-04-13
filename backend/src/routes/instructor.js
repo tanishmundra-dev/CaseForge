@@ -323,6 +323,21 @@ router.delete("/assignments/:assignmentId", async (req, res) => {
   res.json({ success: true });
 });
 
+// ── Week update ──
+
+router.put("/weeks/:weekId", async (req, res) => {
+  const fields = {};
+  if (req.body.title !== undefined) fields.title = req.body.title;
+  if (req.body.number !== undefined) fields.number = req.body.number;
+  if (Object.keys(fields).length === 0) return res.status(400).json({ error: "No fields to update" });
+
+  const { error } = await supabase.from("weeks").update(fields).eq("id", req.params.weekId);
+  if (error) return res.status(500).json({ error: error.message });
+
+  const { data: updated } = await supabase.from("weeks").select("*").eq("id", req.params.weekId).maybeSingle();
+  res.json(updated);
+});
+
 // ── Class update ──
 
 router.put("/classes/:classId", async (req, res) => {
@@ -330,6 +345,8 @@ router.put("/classes/:classId", async (req, res) => {
   if (req.body.title !== undefined) fields.title = req.body.title;
   if (req.body.description !== undefined) fields.description = req.body.description;
   if (req.body.theory_content !== undefined) fields.theory_content = req.body.theory_content;
+  if (req.body.learning_units !== undefined) fields.learning_units = req.body.learning_units;
+  if (req.body.resource_links !== undefined) fields.resource_links = req.body.resource_links;
 
   const { error } = await supabase.from("classes").update(fields).eq("id", req.params.classId);
   if (error) return res.status(500).json({ error: error.message });

@@ -5,12 +5,22 @@ import { fetchAPI } from "@/lib/api";
 import Link from "next/link";
 import {
   ChevronDown, ChevronRight, BookOpen, Code, FileText, ExternalLink,
-  Pencil, Upload, ArrowLeft, Loader2, Sparkles,
+  Pencil, Upload, ArrowLeft, Loader2, Sparkles, Check, Save,
+  Plus, Trash2, Link2,
 } from "lucide-react";
 
+interface ResourceLink { title: string; url: string; description?: string; type?: string; }
+
+const YOUTUBE_REGEX = /(?:youtube\.com\/(?:watch\?v=|embed\/)|youtu\.be\/)([\w-]{11})/;
+const extractYouTubeId = (url?: string): string | null => {
+  if (!url) return null;
+  const m = url.match(YOUTUBE_REGEX);
+  return m ? m[1] : null;
+};
+
 interface Assignment { title: string; description: string; type: string; difficulty: string; starter_code?: string; hints?: string[]; pitfalls?: string[]; aha_moment?: string; questions?: any[]; files?: any[]; test_cases?: any[]; rubric?: any[]; }
-interface ClassItem { number: number; title: string; description: string; assignments: Assignment[]; references?: { title: string; url: string; description: string }[]; }
-interface Week { number: number; title: string; classes: ClassItem[]; }
+interface ClassItem { id?: string; number: number; title: string; description: string; assignments: Assignment[]; references?: ResourceLink[]; }
+interface Week { id: string; number: number; title: string; classes: ClassItem[]; }
 interface Course { id: string; title: string; description: string; difficulty: string; status: string; weeks: Week[]; }
 
 export default function CourseDetailPage() {
@@ -23,6 +33,16 @@ export default function CourseDetailPage() {
   const [expandedWeeks, setExpandedWeeks] = useState<Set<number>>(new Set());
   const [selectedClass, setSelectedClass] = useState<{ week: number; class: number } | null>(null);
   const [publishing, setPublishing] = useState(false);
+  const [editingMeta, setEditingMeta] = useState(false);
+  const [metaDraft, setMetaDraft] = useState<{ title: string; description: string; difficulty: string } | null>(null);
+  const [savingMeta, setSavingMeta] = useState(false);
+  const [metaSavedAt, setMetaSavedAt] = useState<number | null>(null);
+  const [editingWeekId, setEditingWeekId] = useState<string | null>(null);
+  const [weekDraft, setWeekDraft] = useState<string>("");
+  const [editingContent, setEditingContent] = useState(false);
+  const [contentDraft, setContentDraft] = useState<{ title: string; description: string; resources: ResourceLink[] } | null>(null);
+  const [savingContent, setSavingContent] = useState(false);
+  const [contentSavedAt, setContentSavedAt] = useState<number | null>(null);
 
   useEffect(() => {
     fetchAPI(`/instructor/courses/${courseId}`)
@@ -44,6 +64,12 @@ export default function CourseDetailPage() {
 
   const toggleWeek = (n: number) => setExpandedWeeks((p) => { const s = new Set(p); s.has(n) ? s.delete(n) : s.add(n); return s; });
 
+  // Reset inline edit state when user switches classes
+  useEffect(() => {
+    setEditingContent(false);
+    setContentDraft(null);
+  }, [selectedClass?.week, selectedClass?.class]);
+
   const getSelectedClassData = (): ClassItem | null => {
     if (!course || !selectedClass) return null;
     const week = course.weeks.find((w) => w.number === selectedClass.week);
@@ -58,6 +84,100 @@ export default function CourseDetailPage() {
       setCourse((p) => p ? { ...p, status: "published" } : null);
     } catch {}
     finally { setPublishing(false); }
+  };
+
+  const startMetaEdit = () => {
+    if (!course) return;
+    setMetaDraft({ title: course.title, description: course.description, difficulty: course.difficulty });
+    setEditingMeta(true);
+  };
+
+  const saveMeta = async () => {
+    if (!course || !metaDraft) return;
+    setSavingMeta(true);
+    try {
+      await fetchAPI(`/instructor/courses/${course.id}`, {
+        method: "PUT",
+        body: JSON.stringify(metaDraft),
+      });
+      setCourse((p) => p ? { ...p, ...metaDraft } : p);
+      setEditingMeta(false);
+      setMetaSavedAt(Date.now());
+      setTimeout(() => setMetaSavedAt((t) => (t && Date.now() - t >= 2500 ? null : t)), 2600);
+    } catch { alert("Failed to save course details"); }
+    finally { setSavingMeta(false); }
+  };
+
+  const startEditContent = () => {
+    const c = getSelectedClassData();
+    if (!c) return;
+    setContentDraft({
+      title: c.title,
+      description: c.description || "",
+      resources: (c.references || []).map((r) => ({ ...r })),
+    });
+    setEditingContent(true);
+  };
+
+  const updateResource = (idx: number, patch: Partial<ResourceLink>) => {
+    setContentDraft((p) => p ? { ...p, resources: p.resources.map((r, i) => i === idx ? { ...r, ...patch } : r) } : p);
+  };
+  const addResource = () => {
+    setContentDraft((p) => p ? { ...p, resources: [...p.resources, { type: "article", title: "", url: "" }] } : p);
+  };
+  const deleteResource = (idx: number) => {
+    setContentDraft((p) => p ? { ...p, resources: p.resources.filter((_, i) => i !== idx) } : p);
+  };
+
+  const cancelEditContent = () => {
+    setEditingContent(false);
+    setContentDraft(null);
+  };
+
+  const saveContent = async () => {
+    const c = getSelectedClassData();
+    if (!c || !c.id || !contentDraft) return;
+    if (!contentDraft.title.trim()) { alert("Title cannot be empty"); return; }
+    setSavingContent(true);
+    try {
+      const cleanedResources = contentDraft.resources.filter((r) => (r.title?.trim() || r.url?.trim()));
+      await fetchAPI(`/instructor/classes/${c.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          title: contentDraft.title,
+          description: contentDraft.description,
+          resource_links: cleanedResources,
+        }),
+      });
+      setCourse((p) => p ? {
+        ...p,
+        weeks: p.weeks.map((w) => w.number !== selectedClass!.week ? w : {
+          ...w,
+          classes: w.classes.map((cc) => cc.number !== selectedClass!.class ? cc : { ...cc, title: contentDraft.title, description: contentDraft.description, references: cleanedResources }),
+        }),
+      } : p);
+      setEditingContent(false);
+      setContentDraft(null);
+      setContentSavedAt(Date.now());
+      setTimeout(() => setContentSavedAt(null), 2500);
+    } catch { alert("Failed to save class content"); }
+    finally { setSavingContent(false); }
+  };
+
+  const saveWeekTitle = async (weekId: string) => {
+    const newTitle = weekDraft.trim();
+    if (!newTitle) { setEditingWeekId(null); return; }
+    try {
+      await fetchAPI(`/instructor/weeks/${weekId}`, {
+        method: "PUT",
+        body: JSON.stringify({ title: newTitle }),
+      });
+      setCourse((p) => p ? { ...p, weeks: p.weeks.map((w) => w.id === weekId ? { ...w, title: newTitle } : w) } : p);
+    } catch { alert("Failed to update week title"); }
+    finally {
+      setEditingWeekId(null);
+      setWeekDraft("");
+    }
   };
 
   const cls = getSelectedClassData();
@@ -79,7 +199,95 @@ export default function CourseDetailPage() {
   );
 
   return (
-    <div style={{ display: "flex", height: "calc(100vh - 56px)", overflow: "hidden" }}>
+    <div style={{ display: "flex", height: "calc(100vh - 56px)", overflow: "hidden", position: "relative" }}>
+      {/* ═══ META-EDIT MODAL ═══ */}
+      {editingMeta && metaDraft && (
+        <div
+          onClick={() => { if (!savingMeta) { setEditingMeta(false); setMetaDraft(null); } }}
+          style={{
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 1000,
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "100%", maxWidth: 520, background: "var(--bg-primary)",
+              border: "1px solid var(--border)", borderRadius: 12, padding: 24,
+              boxShadow: "0 20px 60px rgba(0,0,0,0.35)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+              <Pencil size={14} color="var(--accent)" />
+              <h3 style={{ fontSize: 15, fontWeight: 700, color: "var(--text-heading)" }}>Edit Course Details</h3>
+            </div>
+
+            <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "var(--text-tertiary)", textTransform: "uppercase", marginBottom: 6 }}>Title</label>
+            <input
+              className="input"
+              value={metaDraft.title}
+              onChange={(e) => setMetaDraft({ ...metaDraft, title: e.target.value })}
+              style={{ width: "100%", marginBottom: 14 }}
+              autoFocus
+            />
+
+            <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "var(--text-tertiary)", textTransform: "uppercase", marginBottom: 6 }}>Description</label>
+            <textarea
+              className="input"
+              value={metaDraft.description}
+              onChange={(e) => setMetaDraft({ ...metaDraft, description: e.target.value })}
+              rows={4}
+              style={{ width: "100%", marginBottom: 14, resize: "vertical", fontFamily: "inherit" }}
+            />
+
+            <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "var(--text-tertiary)", textTransform: "uppercase", marginBottom: 6 }}>Difficulty</label>
+            <select
+              className="input"
+              value={metaDraft.difficulty}
+              onChange={(e) => setMetaDraft({ ...metaDraft, difficulty: e.target.value })}
+              style={{ width: "100%", marginBottom: 20 }}
+            >
+              <option value="Beginner">Beginner</option>
+              <option value="Intermediate">Intermediate</option>
+              <option value="Advanced">Advanced</option>
+            </select>
+
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button
+                className="btn-secondary"
+                onClick={() => { setEditingMeta(false); setMetaDraft(null); }}
+                disabled={savingMeta}
+                style={{ fontSize: 13, padding: "8px 14px" }}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn-primary"
+                onClick={saveMeta}
+                disabled={savingMeta || !metaDraft.title.trim()}
+                style={{ fontSize: 13, padding: "8px 14px" }}
+              >
+                {savingMeta ? <><Loader2 size={13} className="animate-pulse-slow" /> Saving...</> : <><Save size={13} /> Save</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ SAVED TOAST ═══ */}
+      {metaSavedAt && (
+        <div
+          style={{
+            position: "fixed", bottom: 20, right: 20, zIndex: 1100,
+            padding: "10px 16px", background: "var(--success, #10b981)", color: "#fff",
+            borderRadius: 8, fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 6,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
+          }}
+        >
+          <Check size={14} /> Course details saved
+        </div>
+      )}
+
       {/* ═══ SIDEBAR — Weeks & Classes ═══ */}
       <div style={{ width: 280, minWidth: 280, borderRight: "1px solid var(--border)", overflowY: "auto", background: "var(--bg-secondary)", display: "flex", flexDirection: "column" }}>
         {/* Header */}
@@ -87,7 +295,14 @@ export default function CourseDetailPage() {
           <Link href="/instructor/case-studies" style={{ fontSize: 12, color: "var(--text-tertiary)", display: "flex", alignItems: "center", gap: 4, marginBottom: 12 }}>
             <ArrowLeft size={12} /> All Courses
           </Link>
-          <h2 style={{ fontFamily: "var(--font-display)", fontSize: 16, fontWeight: 700, color: "var(--text-heading)", lineHeight: 1.3, marginBottom: 8 }}>{course.title}</h2>
+          <h2
+            onClick={startMetaEdit}
+            title="Click to edit course details"
+            style={{ fontFamily: "var(--font-display)", fontSize: 16, fontWeight: 700, color: "var(--text-heading)", lineHeight: 1.3, marginBottom: 8, cursor: "pointer", display: "flex", alignItems: "flex-start", gap: 4 }}
+          >
+            <span style={{ flex: 1 }}>{course.title}</span>
+            <Pencil size={10} style={{ opacity: 0.3, marginTop: 3 }} />
+          </h2>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             <span className={`badge ${course.status === "published" ? "badge-success" : "badge-warning"}`} style={{ fontSize: 10 }}>{course.status.toUpperCase()}</span>
             <span className="badge badge-neutral" style={{ fontSize: 10 }}>{course.difficulty}</span>
@@ -106,7 +321,29 @@ export default function CourseDetailPage() {
                 >
                   {wOpen ? <ChevronDown size={14} color="var(--accent)" /> : <ChevronRight size={14} color="var(--text-tertiary)" />}
                   <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 600, color: "var(--accent)", background: "var(--accent-subtle)", padding: "1px 6px", borderRadius: 3 }}>W{week.number}</span>
-                  <span style={{ fontSize: 13, fontWeight: 500, color: "var(--text-primary)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{week.title}</span>
+                  {editingWeekId === week.id ? (
+                    <input
+                      className="input"
+                      autoFocus
+                      value={weekDraft}
+                      onChange={(e) => setWeekDraft(e.target.value)}
+                      onClick={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") { e.preventDefault(); saveWeekTitle(week.id); }
+                        if (e.key === "Escape") { setEditingWeekId(null); setWeekDraft(""); }
+                      }}
+                      onBlur={() => saveWeekTitle(week.id)}
+                      style={{ flex: 1, fontSize: 12, padding: "2px 6px", height: 24 }}
+                    />
+                  ) : (
+                    <span
+                      onClick={(e) => { e.stopPropagation(); setEditingWeekId(week.id); setWeekDraft(week.title); }}
+                      title="Click to rename week"
+                      style={{ fontSize: 13, fontWeight: 500, color: "var(--text-primary)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                    >
+                      {week.title}
+                    </span>
+                  )}
                 </div>
 
                 {wOpen && (
@@ -170,16 +407,91 @@ export default function CourseDetailPage() {
           <div style={{ maxWidth: 800 }} className="animate-in">
             {/* Class header */}
             <div style={{ marginBottom: 24 }}>
-              <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.1em" }}>
-                Week {selectedClass!.week} &middot; Class {cls.number}
-              </span>
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <h1 className="display-heading" style={{ fontSize: 26, marginTop: 6, marginBottom: 12 }}>{cls.title}</h1>
-                <a href={`/instructor/classes/${cls.id}`} className="btn-secondary" style={{ padding: "4px 10px", fontSize: 11, marginTop: 4 }}>Edit Class</a>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 6 }}>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.1em" }}>
+                  Week {selectedClass!.week} &middot; Class {cls.number}
+                </span>
+                {!editingContent ? (
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    {contentSavedAt && (
+                      <span style={{ fontSize: 11, color: "var(--success, #10b981)", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                        <Check size={12} /> Saved
+                      </span>
+                    )}
+                    <button
+                      className="btn-primary"
+                      onClick={startEditContent}
+                      style={{ padding: "6px 12px", fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }}
+                    >
+                      <Pencil size={12} /> Edit Content
+                    </button>
+                    {cls.id && (
+                      <a
+                        href={`/instructor/classes/${cls.id}`}
+                        className="btn-secondary"
+                        style={{ padding: "6px 12px", fontSize: 12 }}
+                        title="Open the full class editor (learning units, resources, etc.)"
+                      >
+                        Full Editor
+                      </a>
+                    )}
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      className="btn-secondary"
+                      onClick={cancelEditContent}
+                      disabled={savingContent}
+                      style={{ padding: "6px 12px", fontSize: 12 }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      className="btn-primary"
+                      onClick={saveContent}
+                      disabled={savingContent || !contentDraft?.title.trim()}
+                      style={{ padding: "6px 12px", fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }}
+                    >
+                      {savingContent ? <Loader2 size={12} className="animate-pulse-slow" /> : <Check size={12} />}
+                      {savingContent ? "Saving..." : "Save"}
+                    </button>
+                  </div>
+                )}
               </div>
 
+              {/* Title */}
+              {editingContent && contentDraft ? (
+                <input
+                  className="input"
+                  autoFocus
+                  value={contentDraft.title}
+                  onChange={(e) => setContentDraft({ ...contentDraft, title: e.target.value })}
+                  placeholder="Class title"
+                  style={{ width: "100%", fontSize: 22, fontWeight: 700, padding: "6px 10px", marginBottom: 12, fontFamily: "var(--font-display)" }}
+                />
+              ) : (
+                <h1 className="display-heading" style={{ fontSize: 26, marginTop: 6, marginBottom: 12 }}>{cls.title}</h1>
+              )}
+
               {/* Description / Lecture Notes */}
-              {cls.description && (
+              {editingContent && contentDraft ? (
+                <div style={{ padding: "16px 20px", background: "var(--bg-secondary)", borderRadius: 10, border: "1px solid var(--accent)", marginBottom: 24 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
+                    <BookOpen size={14} color="var(--accent)" />
+                    <span style={{ fontSize: 12, fontWeight: 600, color: "var(--accent)", textTransform: "uppercase" }}>
+                      Lecture Notes / Description
+                    </span>
+                  </div>
+                  <textarea
+                    className="input"
+                    value={contentDraft.description}
+                    onChange={(e) => setContentDraft({ ...contentDraft, description: e.target.value })}
+                    placeholder="Write the lecture notes or class description..."
+                    rows={8}
+                    style={{ width: "100%", fontSize: 14, lineHeight: 1.7, padding: "10px 12px", resize: "vertical", fontFamily: "inherit" }}
+                  />
+                </div>
+              ) : cls.description ? (
                 <div style={{ padding: "16px 20px", background: "var(--bg-secondary)", borderRadius: 10, border: "1px solid var(--border)", marginBottom: 24 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
                     <BookOpen size={14} color="var(--text-tertiary)" />
@@ -189,7 +501,7 @@ export default function CourseDetailPage() {
                   </div>
                   <p style={{ fontSize: 14, color: "var(--text-secondary)", lineHeight: 1.8, whiteSpace: "pre-wrap" }}>{cls.description}</p>
                 </div>
-              )}
+              ) : null}
             </div>
 
             {/* Assignments */}
@@ -283,12 +595,127 @@ export default function CourseDetailPage() {
               </div>
             ))}
 
-            {/* References */}
-            {cls.references && cls.references.length > 0 && (
+            {/* References / External Source Links */}
+            {editingContent && contentDraft ? (
+              <div style={{ padding: "16px 20px", background: "var(--accent-subtle)", borderRadius: 10, marginTop: 20, border: "1px solid var(--accent)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12 }}>
+                  <BookOpen size={14} color="var(--accent)" />
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "var(--accent)", textTransform: "uppercase", flex: 1 }}>External Source Links</span>
+                  <button
+                    className="btn-secondary"
+                    onClick={addResource}
+                    style={{ fontSize: 11, padding: "4px 10px", display: "inline-flex", alignItems: "center", gap: 4 }}
+                  >
+                    <Plus size={11} /> Add Link
+                  </button>
+                </div>
+                {contentDraft.resources.length === 0 ? (
+                  <div style={{ fontSize: 12, color: "var(--text-tertiary)", fontStyle: "italic" }}>
+                    No external links yet — click &ldquo;Add Link&rdquo; to attach one.
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                    {contentDraft.resources.map((ref, ri) => {
+                      const ytId = extractYouTubeId(ref.url);
+                      const urlInvalid = (ref.url || "").trim() && !ytId && ref.type === "video";
+                      return (
+                        <div key={ri} style={{ padding: "12px 14px", background: "var(--bg-primary)", borderRadius: 8, border: "1px solid var(--border)" }}>
+                          {/* Header row: type + title + delete */}
+                          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+                            <select
+                              value={ref.type || "article"}
+                              onChange={(e) => updateResource(ri, { type: e.target.value })}
+                              style={{ fontSize: 11, padding: "4px 8px", background: "var(--bg-tertiary)", border: "1px solid var(--border)", borderRadius: 4, fontFamily: "var(--font-mono)", textTransform: "uppercase" }}
+                            >
+                              <option value="article">article</option>
+                              <option value="video">video</option>
+                              <option value="docs">docs</option>
+                              <option value="book">book</option>
+                              <option value="other">other</option>
+                            </select>
+                            <input
+                              className="input"
+                              placeholder="Title"
+                              value={ref.title || ""}
+                              onChange={(e) => updateResource(ri, { title: e.target.value })}
+                              style={{ flex: 1, fontSize: 13, fontWeight: 600, padding: "5px 10px" }}
+                            />
+                            <button
+                              onClick={() => deleteResource(ri)}
+                              title="Delete link"
+                              style={{ background: "none", border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer", color: "var(--danger, #dc2626)", padding: "4px 8px", display: "flex", alignItems: "center" }}
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+
+                          {/* URL row with Open icon */}
+                          <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 8 }}>
+                            <Link2 size={12} color="var(--text-tertiary)" />
+                            <input
+                              className="input"
+                              type="url"
+                              placeholder="https://..."
+                              value={ref.url || ""}
+                              onChange={(e) => updateResource(ri, { url: e.target.value })}
+                              style={{ flex: 1, fontSize: 12, padding: "4px 8px", fontFamily: "var(--font-mono)" }}
+                            />
+                            {ref.url && (
+                              <a
+                                href={ref.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                title="Open link in new tab"
+                                style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 600, color: ytId ? "#DC2626" : "var(--accent)", textDecoration: "none", padding: "4px 8px", borderRadius: 4, background: ytId ? "#DC262610" : "var(--accent-subtle)" }}
+                              >
+                                {ytId ? "▶ Open in YouTube" : "Open"}
+                                <ExternalLink size={10} />
+                              </a>
+                            )}
+                          </div>
+
+                          {urlInvalid && (
+                            <div style={{ fontSize: 11, color: "var(--danger, #dc2626)", marginBottom: 8 }}>
+                              Not a valid YouTube URL — expected youtube.com/watch?v=… or youtu.be/…
+                            </div>
+                          )}
+
+                          {/* Description */}
+                          <input
+                            className="input"
+                            placeholder="Description (optional)"
+                            value={ref.description || ""}
+                            onChange={(e) => updateResource(ri, { description: e.target.value })}
+                            style={{ width: "100%", fontSize: 11, padding: "4px 8px" }}
+                          />
+
+                          {/* Student preview — YouTube embed */}
+                          {ytId && (
+                            <div style={{ marginTop: 10 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 600, color: "var(--text-tertiary)", textTransform: "uppercase", marginBottom: 6 }}>
+                                <ExternalLink size={10} /> Student Preview
+                              </div>
+                              <div style={{ position: "relative", width: "100%", paddingBottom: "56.25%", height: 0, borderRadius: 8, overflow: "hidden", background: "#000" }}>
+                                <iframe
+                                  src={`https://www.youtube.com/embed/${ytId}`}
+                                  title={ref.title || "YouTube preview"}
+                                  allowFullScreen
+                                  style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: 0 }}
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            ) : cls.references && cls.references.length > 0 ? (
               <div style={{ padding: "16px 20px", background: "var(--accent-subtle)", borderRadius: 10, marginTop: 20 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
                   <BookOpen size={14} color="var(--accent)" />
-                  <span style={{ fontSize: 12, fontWeight: 600, color: "var(--accent)", textTransform: "uppercase" }}>References</span>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "var(--accent)", textTransform: "uppercase" }}>External Source Links</span>
                 </div>
                 {cls.references.map((ref, ri) => (
                   <div key={ri} style={{ marginBottom: 6 }}>
@@ -299,7 +726,7 @@ export default function CourseDetailPage() {
                   </div>
                 ))}
               </div>
-            )}
+            ) : null}
           </div>
         )}
       </div>
