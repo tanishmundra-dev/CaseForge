@@ -485,8 +485,43 @@ function normalizeQuestions(questions) {
   });
 }
 
+// Heuristic: Gemini sometimes labels everything "video" regardless of content.
+// Infer the real type from title cues and the presence of type-specific fields
+// (questions, starter_code, rubric). Only runs as a safety net — the prompt is
+// the primary driver, this catches the remaining misclassifications.
+function inferTypeFromSignals(unit) {
+  const title = (unit.title || "").toLowerCase();
+  const hasQuestions = Array.isArray(unit.questions) && unit.questions.length > 0;
+  const hasStarter = typeof unit.starter_code === "string" && unit.starter_code.trim().length > 0;
+  const hasRubric = Array.isArray(unit.rubric) && unit.rubric.length > 0;
+
+  // Field-based signals are strongest — the LLM already populated them.
+  if (hasRubric || (hasStarter && (unit.duration || 0) >= 25)) return "graded_assignment";
+  if (hasStarter) return "checkpoint_coding";
+  if (hasQuestions) return "checkpoint_quiz";
+
+  // Title-based signals for units where the LLM wrote content but mislabeled.
+  if (/^(quick check|knowledge check|test your understanding|quiz|check your)\b/.test(title)) return "checkpoint_quiz";
+  if (/^(try it|implement|code challenge|practice|exercise)\b/.test(title)) return "checkpoint_coding";
+  if (/^(build|project|assignment|capstone)\b/.test(title)) return "graded_assignment";
+  if (/^(explore|research|reflect|discuss)\b/.test(title)) return "activity";
+  if (/^(deep dive|summary|reference|key takeaways)\b/.test(title)) return "reading";
+
+  return null;
+}
+
 function postProcessLearningUnits(units, courseTitle) {
   return (units || []).map((unit) => {
+    // Safety net: if Gemini mislabeled (e.g., everything as "video"), infer the
+    // real type from title/field signals BEFORE the type-specific normalization
+    // below runs — otherwise a mis-typed "video" skips the fields it actually
+    // needs (questions, starter_code, etc).
+    const inferred = inferTypeFromSignals(unit);
+    if (inferred && inferred !== unit.type) {
+      console.log(`[type-fix] "${unit.title}" relabeled: ${unit.type} → ${inferred}`);
+      unit.type = inferred;
+    }
+
     // Ensure checkpoint_coding has starter code + solution
     if (unit.type === "checkpoint_coding") {
       if (!unit.starter_code || !unit.starter_code.trim()) {
@@ -592,27 +627,96 @@ function buildUnitsSystemPrompt(isCodingCourse) {
 
 ${codingFlavor}
 
-### UNIT TYPES
-- "video": Concept intro / storytelling / walkthrough. content = detailed transcript (500+ words). completion_type: "auto". Include "video_search_query" (5-10 word YouTube search) and "video_channel" (real channel name). NEVER fabricate YouTube URLs.
-- "reading": Structured reference / deep-dive. content = comprehensive markdown (800+ words) with headers, 💡 Pro Tips, ⚠️ Common Mistakes, 🎯 Key Insights. completion_type: "auto".
-- "activity": Open-ended hands-on task (no auto-grading). content = short actionable instructions (100-200 words). completion_type: "manual".
-- "checkpoint_quiz": SHORT 2-3 question quiz testing the concept JUST taught in the previous unit. MUST include "questions" array. Graded instantly. duration: 3-5 min. completion_type: "graded".
-- "checkpoint_coding": SHORT coding exercise (5-10 min) testing ONE concept just taught. MUST include "starter_code" (5-8 lines with one TODO), "test_cases" (2-3 simple cases), "solution_code" (complete). duration: 5-10 min. completion_type: "graded".
-- "graded_assignment": FULL coding/project assignment (30-60 min) at the END of the class only. MUST include "starter_code" (10+ lines), "test_cases" (3+ with edge cases), "rubric" (weights summing to 100), "solution_code" (complete working), "hints", "pitfalls", "aha_moment". duration: 30-60 min. completion_type: "graded".
+### HOW TO DECIDE THE TYPE FOR EACH UNIT
 
-### STRUCTURE PATTERN (MUST follow)
-1. video or reading — introduce concept A
-2. checkpoint_quiz OR checkpoint_coding — practice concept A immediately
-3. video or reading — introduce concept B
-4. checkpoint_coding OR activity — practice concept B immediately
-5. video or reading — deepen understanding, connect A + B
-6. checkpoint_quiz — test combined understanding
-7. reading — summary and what is next
-8. graded_assignment — full assessment combining everything from this class
+BEFORE writing each unit, you MUST decide its type using this decision tree:
 
-CRITICAL RULE: Never place more than 2 passive units (video/reading) in a row without an interactive unit between them. Students must DO something every 10-15 minutes.
+Step 1: Does this unit ask the student to answer questions?
+  → YES → type = "checkpoint_quiz"
 
-Total class duration 60-120 minutes. No single unit over 60 minutes.
+Step 2: Does this unit ask the student to write/edit code (5-10 min)?
+  → YES → type = "checkpoint_coding"
+
+Step 3: Is this a full graded exercise/project (30+ min) with rubric?
+  → YES → type = "graded_assignment"
+
+Step 4: Does this unit ask the student to do something hands-on without auto-grading?
+  → YES → type = "activity"
+
+Step 5: Is this a long-form written reference (800+ words, deep dive)?
+  → YES → type = "reading"
+
+Step 6: Is this a lecture/explanation with NO student interaction at all?
+  → YES → type = "video"
+
+If you reach Step 6, it is a video. If you matched earlier, use that type. NEVER label a quiz as "video". NEVER label a coding exercise as "video".
+
+### UNIT TYPE SPECIFICATIONS
+
+checkpoint_quiz (type: "checkpoint_quiz"):
+  When to use: After every video or reading to test what the student just learned
+  Required fields: questions (array of 2-3 MCQ/fill_up objects)
+  Duration: 3-5 minutes
+  completion_type: "graded"
+  Example title patterns: "Quick Check:", "Knowledge Check:", "Test Your Understanding"
+
+checkpoint_coding (type: "checkpoint_coding"):
+  When to use: After a reading that explains a concept, let the student practice it immediately
+  Required fields: starter_code (5-8 lines with ONE TODO), solution_code, test_cases (2-3)
+  Duration: 5-10 minutes
+  completion_type: "graded"
+  Example title patterns: "Try It:", "Implement:", "Code Challenge:", "Practice:"
+
+graded_assignment (type: "graded_assignment"):
+  When to use: ONLY as the LAST unit of the class — the full assessment
+  Required fields: starter_code (10+ lines), solution_code, test_cases (3+), rubric (weights sum to 100), hints, pitfalls, aha_moment
+  Duration: 30-60 minutes
+  completion_type: "graded"
+  Example title patterns: "Build:", "Project:", "Assignment:", "Capstone:"
+
+activity (type: "activity"):
+  When to use: When students need to do something that can't be auto-graded (research, discuss, explore)
+  Required fields: content (100-200 words of instructions)
+  Duration: 5-15 minutes
+  completion_type: "manual"
+  Example title patterns: "Explore:", "Research:", "Reflect:", "Discuss:"
+
+reading (type: "reading"):
+  When to use: For deep reference material, summaries, or comprehensive guides
+  Required fields: content (800+ words markdown with headers, code blocks, tips)
+  Duration: 10-20 minutes
+  completion_type: "auto"
+  Example title patterns: "Deep Dive:", "Summary:", "Reference:", "Key Takeaways"
+
+video (type: "video"):
+  When to use: ONLY for pure explanations/lectures where the student watches/reads passively with NO interaction
+  Required fields: content (500+ words transcript), video_search_query, video_channel
+  Duration: 8-15 minutes
+  completion_type: "auto"
+  Example title patterns: "Why [X] Matters", "Understanding [X]", "How [X] Works"
+  NOTE: If the unit has questions, starter_code, or asks the student to DO anything, it is NOT a video
+
+### REQUIRED CLASS STRUCTURE (8-10 units per class)
+
+Every class MUST follow this exact alternating pattern:
+
+  1. type: "video" — introduce concept A (pure explanation, no interaction)
+  2. type: "checkpoint_quiz" — 2-3 questions testing concept A
+  3. type: "reading" — deep dive into concept A with code examples
+  4. type: "checkpoint_coding" — student writes code to practice concept A
+  5. type: "video" — introduce concept B (pure explanation, no interaction)
+  6. type: "checkpoint_quiz" — 2-3 questions testing concepts A + B
+  7. type: "reading" — summary, key takeaways, what comes next
+  8. type: "graded_assignment" — full assessment combining concepts A + B
+
+MANDATORY MINIMUMS:
+- At least 2 units with type "checkpoint_quiz"
+- At least 1 unit with type "checkpoint_coding"
+- Exactly 1 unit with type "graded_assignment" (always last)
+- No more than 2 consecutive units with the same type
+- "video" and "reading" units MUST be followed by an interactive unit (checkpoint_quiz, checkpoint_coding, or activity)
+
+TOTAL: 2-3 videos + 1-2 readings + 2 checkpoint_quizzes + 1 checkpoint_coding + 1 graded_assignment = 8-10 units
 
 ### MCQ QUESTION SHAPE (for checkpoint_quiz)
 Each MCQ uses stable IDs so option reordering can't break the answer key:
@@ -648,23 +752,35 @@ Resource rules:
 
 learning_units format (7-10 items following the STRUCTURE PATTERN above):
 [
-  { "type":"video", "title":"...", "duration":12, "content":"...", "completion_type":"auto", "video_search_query":"...", "video_channel":"..." },
-  { "type":"checkpoint_quiz", "title":"Check: concept A", "duration":4, "content":"Test what you just learned.", "completion_type":"graded",
+  { "type":"video", "title":"Why [Concept A] Matters in [Domain]", "duration":12, "content":"FULL 500+ word transcript starting with a real-world problem...", "completion_type":"auto", "video_search_query":"specific search query 5-10 words", "video_channel":"Channel Name" },
+  { "type":"checkpoint_quiz", "title":"Quick Check: [Concept A] Basics", "duration":4, "content":"Test your understanding of what you just learned.", "completion_type":"graded",
     "questions":[
-      {"type":"mcq","question":"...","options":[{"id":"a","text":"..."},{"id":"b","text":"..."},{"id":"c","text":"..."},{"id":"d","text":"..."}],"correct_id":"b","explanation":"..."},
-      {"type":"fill_up","question":"The ___ is...","answer":"...","explanation":"..."}
+      {"type":"mcq","question":"Specific question about concept A?","options":[{"id":"a","text":"Wrong answer"},{"id":"b","text":"Correct answer"},{"id":"c","text":"Wrong answer"},{"id":"d","text":"Wrong answer"}],"correct_id":"b","explanation":"B is correct because..."},
+      {"type":"mcq","question":"Another question about concept A?","options":[{"id":"a","text":"Option 1"},{"id":"b","text":"Option 2"},{"id":"c","text":"Option 3"},{"id":"d","text":"Option 4"}],"correct_id":"c","explanation":"C is correct because..."},
+      {"type":"fill_up","question":"In [concept A], the ___ is responsible for...","answer":"keyword","explanation":"Because..."}
     ]
   },
-  { "type":"reading", "title":"...", "duration":15, "content":"# Heading\\n\\n...", "completion_type":"auto" },
-  { "type":"checkpoint_coding", "title":"Try It", "duration":8, "content":"Instructions", "completion_type":"graded",
-    "starter_code":"# 5-8 lines with one TODO", "solution_code":"# complete", "test_cases":[{"input":"...","expected_output":"...","description":"..."}]
+  { "type":"reading", "title":"Deep Dive: [Concept A] in Practice", "duration":15, "content":"# Heading\\n\\nFULL 800+ word markdown with code blocks, pro tips, common mistakes...", "completion_type":"auto" },
+  { "type":"checkpoint_coding", "title":"Try It: Implement [Small Task]", "duration":8, "content":"Write a function that does [specific small task].", "completion_type":"graded",
+    "starter_code":"def task(input):\\n    # TODO: implement [one specific thing]\\n    pass\\n\\nprint(task('test'))", "solution_code":"def task(input):\\n    return input.upper()\\n\\nprint(task('test'))",
+    "test_cases":[{"input":"hello","expected_output":"HELLO","description":"basic case"},{"input":"","expected_output":"","description":"empty string edge case"}]
   },
-  { "type":"reading", "title":"Summary & What's Next", "duration":8, "content":"...", "completion_type":"auto" },
-  { "type":"graded_assignment", "title":"...", "duration":45, "content":"Full assignment description", "completion_type":"graded",
-    "starter_code":"# 10+ lines with TODOs", "solution_code":"# complete working solution",
-    "test_cases":[{"input":"...","expected_output":"...","description":"..."},{"input":"...","expected_output":"...","description":"edge case"},{"input":"...","expected_output":"...","description":"another edge"}],
-    "rubric":[{"criterion":"Correctness","excellent":"...","acceptable":"...","poor":"...","weight":50},{"criterion":"Code Quality","excellent":"...","acceptable":"...","poor":"...","weight":50}],
-    "hints":["..."], "pitfalls":["..."], "aha_moment":"..."
+  { "type":"video", "title":"[Concept B]: Building on [Concept A]", "duration":10, "content":"FULL 500+ word transcript connecting concept B to what was just practiced...", "completion_type":"auto", "video_search_query":"search query", "video_channel":"Channel" },
+  { "type":"checkpoint_quiz", "title":"Connecting the Dots: [A] + [B]", "duration":4, "content":"Test your combined understanding.", "completion_type":"graded",
+    "questions":[
+      {"type":"mcq","question":"How does concept B relate to concept A?","options":[{"id":"a","text":"..."},{"id":"b","text":"..."},{"id":"c","text":"..."},{"id":"d","text":"..."}],"correct_id":"a","explanation":"..."},
+      {"type":"fill_up","question":"When combining [A] and [B], you must first ___ before...","answer":"keyword","explanation":"..."}
+    ]
+  },
+  { "type":"reading", "title":"Summary: Key Takeaways and Common Pitfalls", "duration":8, "content":"# What You Learned\\n\\nMarkdown summary of both concepts, common mistakes to avoid, what is coming next...", "completion_type":"auto" },
+  { "type":"graded_assignment", "title":"Build: [Full Exercise Name]", "duration":40, "content":"Full assignment combining concepts A and B. Detailed instructions...", "completion_type":"graded",
+    "starter_code":"# 10+ lines with clear TODOs\\ndef solve(data):\\n    # TODO Step 1: process with concept A\\n    # TODO Step 2: apply concept B\\n    # TODO Step 3: combine and return result\\n    pass\\n\\nprint(solve(sample_data))",
+    "solution_code":"# Complete working solution\\ndef solve(data):\\n    step1 = process_a(data)\\n    step2 = apply_b(step1)\\n    return combine(step1, step2)\\n\\nprint(solve(sample_data))",
+    "test_cases":[{"input":"test_data","expected_output":"expected","description":"basic case"},{"input":"edge_data","expected_output":"edge_expected","description":"edge case"},{"input":"empty","expected_output":"default","description":"empty input"}],
+    "rubric":[{"criterion":"Correctness","excellent":"All tests pass","acceptable":"Most pass","poor":"Fails basic","weight":40},{"criterion":"Concept A Usage","excellent":"Properly applied","acceptable":"Partial","poor":"Missing","weight":30},{"criterion":"Code Quality","excellent":"Clean, documented","acceptable":"Works","poor":"Messy","weight":30}],
+    "hints":["Start with step 1 before combining"],
+    "pitfalls":["Forgetting to handle the edge case where input is empty"],
+    "aha_moment":"The key insight connecting concept A and B"
   }
 ]
 
@@ -687,7 +803,14 @@ Week ${weekNum}/${numWeeks}: "${weekTitle}"
 Class ${classNum}: "${classTitle}"
 Phase: ${phase}
 
-Design 7-10 Learning Units following the STRUCTURE PATTERN. Make sure the content is specific to "${classTitle}" — not generic "Introduction to X" filler. End with exactly one graded_assignment.`;
+Design 8-10 Learning Units following the STRUCTURE PATTERN. Requirements:
+- MUST include at least 2 checkpoint_quiz units (with 2-3 questions each)
+- MUST include at least 1 checkpoint_coding unit (with starter_code and test_cases)
+- MUST end with exactly 1 graded_assignment
+- MUST alternate: passive unit → interactive unit → passive unit → interactive unit
+- After EVERY video or reading, the NEXT unit must be a checkpoint_quiz or checkpoint_coding
+- Content must be specific to "${classTitle}" — not generic "Introduction to X" filler
+- Include 3-5 resource_links with real URLs from official documentation sites`;
 }
 
 // ═══════════════════════════════════════════════════════════

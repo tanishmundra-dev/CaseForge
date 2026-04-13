@@ -59,14 +59,28 @@ const unitIcons: Record<string, any> = {
   reading: <BookOpen size={16} />,
   activity: <Wrench size={16} />,
   quiz: <FileText size={16} />,
+  checkpoint_quiz: <FileText size={16} />,
+  checkpoint_coding: <FileText size={16} />,
+  graded_assignment: <FileText size={16} />,
 };
 const unitColors: Record<string, string> = {
   video: "#DC2626",
   reading: "#D97706",
   activity: "#16A34A",
   quiz: "#7C3AED",
+  checkpoint_quiz: "#7C3AED",
+  checkpoint_coding: "#0891B2",
+  graded_assignment: "#EA580C",
 };
-const unitLabels: Record<string, string> = { video: "Video", reading: "Reading", activity: "Activity", quiz: "Quiz" };
+const unitLabels: Record<string, string> = {
+  video: "Video",
+  reading: "Reading",
+  activity: "Activity",
+  quiz: "Quiz",
+  checkpoint_quiz: "Quick Check",
+  checkpoint_coding: "Code Practice",
+  graded_assignment: "Assignment",
+};
 
 function getYouTubeId(url: string): string | null {
   if (!url) return null;
@@ -122,13 +136,28 @@ function InlineQuiz({ questions, unitIndex, courseId, classId, isDone, onComplet
   const [submitted, setSubmitted] = useState(false);
   const [score, setScore] = useState<number | null>(null);
 
+  // MCQ options arrive in two shapes:
+  //   legacy — options: ["A","B",...],               correct: 0 (index)
+  //   canonical — options: [{id:"a",text:"A"},...],  correct_id: "b" (id string)
+  // Normalize to the option INDEX that is correct, so UI selection (keyed by index) stays consistent.
+  const correctIndexOf = (q: any): number => {
+    if (typeof q.correct === "number") return q.correct;
+    if (q.correct_id != null && Array.isArray(q.options)) {
+      const idx = q.options.findIndex((o: any) => o && typeof o === "object" && o.id === q.correct_id);
+      if (idx >= 0) return idx;
+    }
+    return -1;
+  };
+  const optionText = (opt: any): string =>
+    opt && typeof opt === "object" ? String(opt.text ?? "") : String(opt ?? "");
+
   const handleSubmit = async () => {
     let correct = 0;
     questions.forEach((q: any, i: number) => {
       if (q.type === "fill_up") {
         if ((answers[i] || "").toLowerCase().trim() === (q.answer || "").toLowerCase().trim()) correct++;
       } else {
-        if (answers[i] === q.correct) correct++;
+        if (answers[i] === correctIndexOf(q)) correct++;
       }
     });
     const finalScore = Math.round((correct / Math.max(questions.length, 1)) * 100);
@@ -159,7 +188,7 @@ function InlineQuiz({ questions, unitIndex, courseId, classId, isDone, onComplet
   const isCorrect = (qi: number) => {
     const q = questions[qi];
     if (q.type === "fill_up") return (answers[qi] || "").toLowerCase().trim() === (q.answer || "").toLowerCase().trim();
-    return answers[qi] === q.correct;
+    return answers[qi] === correctIndexOf(q);
   };
 
   return (
@@ -239,12 +268,13 @@ function InlineQuiz({ questions, unitIndex, courseId, classId, isDone, onComplet
             </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {(q.options || []).map((opt: string, oi: number) => {
+              {(q.options || []).map((opt: any, oi: number) => {
+                const correctIdx = correctIndexOf(q);
                 const selected = answers[qi] === oi;
-                const correct = submitted && oi === q.correct;
-                const wrong = submitted && selected && oi !== q.correct;
+                const correct = submitted && oi === correctIdx;
+                const wrong = submitted && selected && oi !== correctIdx;
                 const showYourAnswerTag = submitted && selected;
-                const showCorrectAnswerTag = submitted && oi === q.correct;
+                const showCorrectAnswerTag = submitted && oi === correctIdx;
                 return (
                   <label
                     key={oi}
@@ -263,7 +293,7 @@ function InlineQuiz({ questions, unitIndex, courseId, classId, isDone, onComplet
                     }}>
                       {(selected || correct) && <div style={{ width: 10, height: 10, borderRadius: "50%", background: correct ? "var(--success)" : wrong ? "var(--danger)" : "var(--accent)" }} />}
                     </div>
-                    <span style={{ fontSize: 13, color: correct ? "var(--success)" : wrong ? "var(--danger)" : "var(--text-primary)", flex: 1 }}>{opt}</span>
+                    <span style={{ fontSize: 13, color: correct ? "var(--success)" : wrong ? "var(--danger)" : "var(--text-primary)", flex: 1 }}>{optionText(opt)}</span>
                     {showYourAnswerTag && (
                       <span style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: wrong ? "var(--danger)" : "var(--success)", padding: "2px 7px", border: `1px solid ${wrong ? "var(--danger)" : "var(--success)"}55`, borderRadius: 999, flexShrink: 0 }}>
                         Your answer
@@ -512,8 +542,8 @@ export default function ClassDetailPage() {
                         </a>
                       )}
 
-                      {/* Quiz unit — interactive */}
-                      {unit.type === "quiz" && unit.questions && unit.questions.length > 0 ? (
+                      {/* Quiz unit — interactive (matches legacy "quiz" and new "checkpoint_quiz") */}
+                      {(unit.type === "quiz" || unit.type === "checkpoint_quiz") && unit.questions && unit.questions.length > 0 ? (
                         <InlineQuiz
                           questions={unit.questions}
                           unitIndex={ui}

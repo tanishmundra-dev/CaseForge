@@ -20,6 +20,9 @@ const UNIT_TEMPLATES: Record<string, LearningUnit> = {
   reading: { type: "reading", title: "New Reading", duration: 8, content: "" },
   activity: { type: "activity", title: "New Activity", duration: 15, content: "" },
   quiz: { type: "quiz", title: "Knowledge Check", duration: 5, content: "", questions: [] },
+  checkpoint_quiz: { type: "checkpoint_quiz", title: "Quick Check", duration: 4, content: "", questions: [] },
+  checkpoint_coding: { type: "checkpoint_coding", title: "Try It", duration: 8, content: "" },
+  graded_assignment: { type: "graded_assignment", title: "Build: New Assignment", duration: 40, content: "" },
 };
 
 const API = "http://localhost:8000/api";
@@ -564,14 +567,9 @@ function MissionControlInner() {
                     setCourse(freshCourse);
                     expandAll(freshCourse);
                   }
-                  // Show critic feedback if available
-                  const critic = d.course?._critic;
-                  if (critic && critic.verdict) {
-                    const criticMsg = `Course generated! Quality: ${critic.overall_score || "?"}/10 — ${critic.verdict}${critic.suggestions?.length ? "\n\nSuggestions: " + critic.suggestions.join(" | ") : ""}`;
-                    await animateMessage(criticMsg);
-                  } else {
-                    await animateMessage("Course generated! Click any text to edit, or tell me what to change.");
-                  }
+                  // Critic data stays on the course object (d.course._critic) for
+                  // internal use, but is intentionally hidden from the instructor chat.
+                  await animateMessage("Course generated! Click any text to edit, or tell me what to change.");
                   break;
                 case "error":
                   setIsStreaming(false);
@@ -786,6 +784,9 @@ function MissionControlInner() {
             <option value="reading">reading</option>
             <option value="activity">activity</option>
             <option value="quiz">quiz</option>
+            <option value="checkpoint_quiz">quiz (short)</option>
+            <option value="checkpoint_coding">coding</option>
+            <option value="graded_assignment">assignment</option>
           </select>
           <span onClick={(e) => e.stopPropagation()} style={{ display: "inline-flex", alignItems: "center", flexShrink: 0 }}>
             <Editable id={durationFieldId} val={String(unit.duration ?? "")} style={{ fontSize: 10, color: "var(--text-tertiary)", fontFamily: "var(--font-mono)" }} />
@@ -1065,8 +1066,8 @@ function MissionControlInner() {
                                 {cls.learning_units && cls.learning_units.length > 0 ? (() => {
                                   const tKey = `${week.number}-${cls.number}`;
                                   const tOpen = expandedTheory.has(tKey);
-                                  const unitIcons: Record<string, string> = { video: "▶", reading: "📖", activity: "🔧", quiz: "✓" };
-                                  const unitColors: Record<string, string> = { video: "#DC2626", reading: "var(--accent)", activity: "#16A34A", quiz: "#7C3AED" };
+                                  const unitIcons: Record<string, string> = { video: "▶", reading: "📖", activity: "🔧", quiz: "✓", checkpoint_quiz: "✓", checkpoint_coding: "</>", graded_assignment: "🎯" };
+                                  const unitColors: Record<string, string> = { video: "#DC2626", reading: "var(--accent)", activity: "#16A34A", quiz: "#7C3AED", checkpoint_quiz: "#7C3AED", checkpoint_coding: "#0891B2", graded_assignment: "#EA580C" };
                                   const totalMins = cls.learning_units.reduce((s: number, u: any) => s + (u.duration || 0), 0);
                                   return (
                                   <div style={{ marginBottom: 14 }}>

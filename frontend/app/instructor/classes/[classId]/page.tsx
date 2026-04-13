@@ -335,7 +335,7 @@ export default function ClassEditorPage() {
             const urlIsInvalid = (unit.video_url || "").length > 0 && !videoId;
             const isPreview = previewUnit === ui;
             const isOpen = expandedUnit === ui;
-            const typeColor: Record<string, string> = { video: "#DC2626", reading: "#D97706", activity: "#16A34A", quiz: "#7C3AED" };
+            const typeColor: Record<string, string> = { video: "#DC2626", reading: "#D97706", activity: "#16A34A", quiz: "#7C3AED", checkpoint_quiz: "#7C3AED", checkpoint_coding: "#0891B2", graded_assignment: "#EA580C" };
             const color = typeColor[unit.type] || "var(--text-tertiary)";
             const total = (cls.learning_units || []).length;
             return (
@@ -355,6 +355,9 @@ export default function ClassEditorPage() {
                     <option value="reading">Reading</option>
                     <option value="activity">Activity</option>
                     <option value="quiz">Quiz</option>
+                    <option value="checkpoint_quiz">Quiz (short)</option>
+                    <option value="checkpoint_coding">Coding</option>
+                    <option value="graded_assignment">Assignment</option>
                   </select>
                   <input
                     className="input"
