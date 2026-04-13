@@ -83,16 +83,6 @@ export default function LoginPage() {
           </p>
         </div>
 
-        {/* Demo credentials */}
-        <div style={{ marginTop: 20, padding: "14px 18px", background: "var(--accent-subtle)", borderRadius: 8, border: "1px solid rgba(217,119,6,0.15)" }}>
-          <p style={{ fontSize: 12, fontWeight: 600, color: "var(--accent)", marginBottom: 8 }}>Demo Accounts</p>
-          <p style={{ fontSize: 12, color: "var(--text-secondary)", fontFamily: "var(--font-mono)" }}>
-            Instructor: admin@caseforge.com / caseforge123
-          </p>
-          <p style={{ fontSize: 12, color: "var(--text-secondary)", fontFamily: "var(--font-mono)" }}>
-            Student: student@caseforge.com / student123
-          </p>
-        </div>
       </div>
     </div>
   );

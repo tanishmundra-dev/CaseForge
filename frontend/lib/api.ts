@@ -1,4 +1,4 @@
-const API = "http://localhost:8000/api";
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
 
 export async function fetchAPI(path: string, options?: RequestInit) {
   const token = typeof window !== "undefined" ? localStorage.getItem("caseforge_token") : null;

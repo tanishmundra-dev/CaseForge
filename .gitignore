@@ -13,7 +13,10 @@ node_modules/
 .pnpm-debug.log*
 
 # Environment & secrets
-.env*
+.env
+.env.local
+.env.production
+!.env.example
 .mcp.json
 
 # OS
