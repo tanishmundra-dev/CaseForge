@@ -62,6 +62,11 @@ async function callLLM(systemPrompt, userMessages, maxTokens = 8000) {
       });
 
       const text = result.response.text().trim();
+      if (!text) {
+        // Empty response — likely hit safety filter or maxTokens cutoff.
+        // Throw so the outer retry loop (generateClassUnits) gets another shot.
+        throw new Error(`Model ${modelName} returned empty response`);
+      }
       console.log(`Model ${modelName} succeeded`);
       return text;
     } catch (err) {
@@ -326,6 +331,15 @@ Rules:
   }
   outline.weeks = outline.weeks.slice(0, numWeeks);
 
+  // Normalize week & class numbers to positional index. The LLM frequently
+  // returns duplicate numbers (e.g. both classes as "number":1), which caused
+  // Pass 2 week_content_class events to overwrite the same slot on the
+  // frontend — making Class 2 of every week silently disappear.
+  outline.weeks.forEach((w, wi) => {
+    w.number = wi + 1;
+    (w.classes || []).forEach((c, ci) => { c.number = ci + 1; });
+  });
+
   if (onProgress) onProgress("outline", outline);
 
   // PASS 2: Fill content for each week (parallelized within each week)
@@ -497,30 +511,42 @@ Rules:
     });
   }
 
-  // Helper: call LLM for a single class's learning units, with 1 retry on failure
+  // Helper: call LLM for a single class's learning units.
+  // Patient retry — we want every class populated, even at the cost of time.
   async function generateClassUnits(weekNum, weekTitle, ci, classTitle) {
     const prompt = buildUnitsPrompt(weekNum, weekTitle, ci + 1, classTitle);
     const systemMsg = "You are a Coursera-level course platform designer. Generate structured learning units with deep, engaging content. Each unit must be individually completable. Mix video/reading/activity/quiz. Minimum 6 units per class. All content must be real and substantive — no placeholders.";
 
-    for (let attempt = 0; attempt < 2; attempt++) {
+    const MAX_ATTEMPTS = 6;
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       try {
         const text = await callLLM(systemMsg, [{ role: "user", content: prompt }], 65536);
         const data = safeJSON(text);
         const units = data?.learning_units || [];
         if (units.length > 0) {
+          if (attempt > 0) {
+            console.log(`✓ Week ${weekNum} Class ${ci + 1} rescued on attempt ${attempt + 1} — got ${units.length} units`);
+          } else {
+            console.log(`✓ Week ${weekNum} Class ${ci + 1} got ${units.length} units`);
+          }
           const theoryFallback = units
             .filter((u) => u.type === "reading" || u.type === "video")
             .map((u) => `## ${u.title}\n\n${u.content}`)
             .join("\n\n---\n\n");
           return { title: classTitle, description: data?.description || `In-depth session covering ${classTitle}.`, theory_content: theoryFallback, learning_units: units };
         }
-        console.log(`Units empty for Week ${weekNum} Class ${ci + 1}, attempt ${attempt + 1}`);
+        console.log(`Units empty for Week ${weekNum} Class ${ci + 1}, attempt ${attempt + 1}/${MAX_ATTEMPTS}`);
       } catch (err) {
-        console.log(`Units failed for Week ${weekNum} Class ${ci + 1}, attempt ${attempt + 1}:`, err.message?.slice(0, 80));
+        console.log(`Units failed for Week ${weekNum} Class ${ci + 1}, attempt ${attempt + 1}/${MAX_ATTEMPTS}:`, err.message?.slice(0, 80));
       }
-      // Brief pause before retry to ease rate limits
-      if (attempt === 0) await new Promise((r) => setTimeout(r, 2000));
+      // Exponential backoff: 2s, 4s, 8s, 16s, 32s (caps at ~1 min total wait)
+      if (attempt < MAX_ATTEMPTS - 1) {
+        const delay = Math.min(2000 * Math.pow(2, attempt), 32000);
+        console.log(`Retrying Week ${weekNum} Class ${ci + 1} in ${delay / 1000}s...`);
+        await new Promise((r) => setTimeout(r, delay));
+      }
     }
+    console.error(`Exhausted ${MAX_ATTEMPTS} attempts for Week ${weekNum} Class ${ci + 1} "${classTitle}" — returning empty`);
     return { title: classTitle, description: `In-depth session covering ${classTitle}.`, theory_content: "", learning_units: [] };
   }
 
@@ -560,43 +586,80 @@ Rules:
       return null;
     });
 
-    // Run class batches and assignments concurrently
+    // Run class batches and assignments concurrently.
+    // Batch size of 1 = strict sequential per class. Slower, but avoids rate-limit
+    // collisions that were causing classes to land with empty learning_units.
     const [classContents, weekData] = await Promise.all([
-      runInBatches(classUnitTasks, 2),
+      runInBatches(classUnitTasks, 1),
       assignmentPromise,
     ]);
 
     // ────────────────────────────────────────────────
     // Merge results
+    //
+    // The outline (pass 1) is the source of truth for WHICH classes exist.
+    // classContents[ci] is aligned to outline order (because generateClassUnits
+    // was called once per outline class, in order, via runInBatches).
+    // weekData.classes (assignments LLM call) may be in a DIFFERENT order,
+    // have an EXTRA hallucinated class, or DROP one — never trust its index.
+    // Match assignments/resources back to outline classes by title/number.
     // ────────────────────────────────────────────────
-    if (weekData?.classes) {
-      outline.weeks[i].classes = weekData.classes.map((cls, ci) => ({
-        number: ci + 1,
-        title: cls.title || week.classes[ci]?.title || `Class ${ci + 1}`,
-        description: classContents[ci]?.description || cls.description || `Learn about ${cls.title || 'this topic'}.`,
-        theory_content: classContents[ci]?.theory_content || cls.theory_content || "",
-        learning_units: classContents[ci]?.learning_units || [],
-        references: cls.references || cls.resources || [],
-        resources: cls.resources || [],
-        assignments: postProcessAssignments(cls.assignments),
-      }));
-    } else {
-      outline.weeks[i].classes = (week.classes || []).map((cls, ci) => ({
-        number: ci + 1,
-        title: cls.title || `Class ${ci + 1}`,
-        description: classContents[ci]?.description || `Hands-on session covering ${cls.title || 'key concepts'}.`,
-        theory_content: classContents[ci]?.theory_content || `# ${cls.title || 'Class ' + (ci + 1)}\n\nThis lesson covers the key concepts of ${cls.title || 'this topic'}.`,
-        learning_units: classContents[ci]?.learning_units || [],
-        references: [],
-        resources: [],
-        assignments: [{
-          title: `${cls.title} Exercise`, description: "Practice what you learned.",
-          type: "coding", difficulty: "Intermediate",
-          starter_code: `// ${cls.title}\nfunction solve() {\n  // TODO\n}\nconsole.log(solve());`,
-          test_cases: [], rubric: [], hints: [], pitfalls: [], aha_moment: "", questions: [], files: [],
-        }],
-      }));
-    }
+    const matchWeekClass = (outlineClass, ci) => {
+      const list = weekData?.classes || [];
+      // 1. Match by class number
+      let match = list.find((c) => c?.number === (outlineClass?.number ?? ci + 1));
+      // 2. Match by title (case-insensitive)
+      if (!match && outlineClass?.title) {
+        const t = outlineClass.title.toLowerCase().trim();
+        match = list.find((c) => (c?.title || "").toLowerCase().trim() === t);
+      }
+      // 3. Loose title-contains match
+      if (!match && outlineClass?.title) {
+        const t = outlineClass.title.toLowerCase().trim();
+        match = list.find((c) => {
+          const ct = (c?.title || "").toLowerCase().trim();
+          return ct && (ct.includes(t) || t.includes(ct));
+        });
+      }
+      // 4. Last resort: positional
+      if (!match) match = list[ci];
+      return match;
+    };
+
+    outline.weeks[i].classes = (week.classes || []).map((outlineCls, ci) => {
+      const cc = classContents[ci] || {};                // units (aligned to outline)
+      const wc = matchWeekClass(outlineCls, ci) || {};   // assignments (matched by title)
+      // Always use positional index — trusting outlineCls.number can collapse
+      // multiple classes into the same slot if the LLM repeats numbers.
+      const classNumber = ci + 1;
+      const classTitle = outlineCls?.title || wc.title || `Class ${classNumber}`;
+      const hasAssignments = Array.isArray(wc.assignments) && wc.assignments.length > 0;
+
+      return {
+        number: classNumber,
+        title: classTitle,
+        description: cc.description || wc.description || outlineCls?.description || `Learn about ${classTitle}.`,
+        theory_content: cc.theory_content || wc.theory_content || "",
+        learning_units: cc.learning_units || [],
+        references: wc.references || wc.resources || [],
+        resources: wc.resources || [],
+        assignments: hasAssignments
+          ? postProcessAssignments(wc.assignments)
+          : [{
+              title: `${classTitle} Exercise`, description: "Practice what you learned.",
+              type: "coding", difficulty: "Intermediate",
+              starter_code: `// ${classTitle}\nfunction solve() {\n  // TODO\n}\nconsole.log(solve());`,
+              test_cases: [], rubric: [], hints: [], pitfalls: [], aha_moment: "", questions: [], files: [],
+            }],
+      };
+    });
+
+    // Diagnostic: log any class that ended up without units after the merge
+    outline.weeks[i].classes.forEach((c) => {
+      if (!c.learning_units || c.learning_units.length === 0) {
+        console.warn(`⚠ Week ${week.number} Class ${c.number} "${c.title}" has NO learning_units after merge`);
+      }
+    });
 
     if (onProgress) onProgress("week", outline.weeks[i]);
   }

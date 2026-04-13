@@ -12,7 +12,9 @@ const API = "http://localhost:8000/api";
 
 interface Message { role: "user" | "assistant" | "system"; content: string; }
 interface Assignment { title: string; description: string; type: string; difficulty: string; starter_code?: string; hints?: string[]; pitfalls?: string[]; aha_moment?: string; questions?: any[]; files?: any[]; test_cases?: any[]; rubric?: any[]; [k: string]: any; }
-interface ClassItem { number: number; title: string; description: string; theory_content?: string; assignments: Assignment[]; references?: { title: string; url: string; description: string }[]; }
+interface LearningUnit { type: string; title: string; duration?: number; content?: string; completion_type?: string; questions?: unknown[]; video_search_query?: string; video_channel?: string; }
+interface ResourceLink { title: string; url?: string; description?: string; type?: string; source?: string; video_search_query?: string; channel?: string; }
+interface ClassItem { number: number; title: string; description: string; theory_content?: string; assignments: Assignment[]; references?: { title: string; url: string; description: string }[]; learning_units?: LearningUnit[]; resource_links?: ResourceLink[]; resources?: ResourceLink[]; }
 interface Week { number: number; title: string; classes: ClassItem[]; }
 interface CourseState { id?: string; title: string; description: string; difficulty: string; weeks: Week[]; status?: string; }
 
@@ -255,7 +257,24 @@ function MissionControlInner() {
             const cn = mod.class || mod.data.number;
             const ci = u.weeks[wi].classes.findIndex((c) => c.number === cn);
             if (ci >= 0) {
-              u.weeks[wi].classes[ci] = { ...u.weeks[wi].classes[ci], ...mod.data, number: cn };
+              const existing = u.weeks[wi].classes[ci];
+              // Guard: the LLM often sends a "class modify" payload that only
+              // touches title/description and omits (or empties) learning_units,
+              // theory_content, assignments, resource_links. Spread would wipe
+              // real content with nothing — keep existing when incoming is empty.
+              const keepIfEmpty = <T,>(incoming: T[] | undefined, current: T[]): T[] =>
+                incoming && incoming.length > 0 ? incoming : current;
+              u.weeks[wi].classes[ci] = {
+                ...existing,
+                ...mod.data,
+                number: cn,
+                theory_content: mod.data.theory_content?.trim()
+                  ? mod.data.theory_content
+                  : existing.theory_content,
+                learning_units: keepIfEmpty(mod.data.learning_units, existing.learning_units || []),
+                assignments: keepIfEmpty(mod.data.assignments, existing.assignments || []),
+                resource_links: keepIfEmpty(mod.data.resource_links, existing.resource_links || []),
+              };
               setModifiedKey(`c-${mod.week}-${cn}`);
               setExpandedWeeks((p) => new Set([...p, mod.week]));
               setExpandedClasses((p) => new Set([...p, `${mod.week}-${cn}`]));
@@ -353,6 +372,10 @@ function MissionControlInner() {
       if (!reader) throw new Error("No reader");
 
       let weeks: Week[] = [];
+      // evt must persist across chunks — TCP can fragment an SSE message between
+      // its "event: X\n" and "data: {...}\n" lines, and resetting evt per chunk
+      // silently drops the data line (this was why Class 2 never rendered).
+      let evt = "";
 
       while (true) {
         const { done, value } = await reader.read();
@@ -360,7 +383,6 @@ function MissionControlInner() {
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
-        let evt = "";
         for (const line of lines) {
           if (line.startsWith("event: ")) evt = line.slice(7).trim();
           else if (line.startsWith("data: ") && evt) {
@@ -370,17 +392,29 @@ function MissionControlInner() {
                 case "course_meta":
                   setCourse({ title: d.title, description: d.description, difficulty: d.difficulty, weeks: [] });
                   break;
-                case "week":
-                  weeks = [...weeks, { number: d.number, title: d.title, classes: [] }];
-                  setCourse((p) => p ? { ...p, weeks: [...weeks] } : null);
+                case "week": {
+                  const newWeek: Week = { number: d.number, title: d.title, classes: [] };
+                  weeks = [...weeks, newWeek];
+                  setCourse((p) => p ? { ...p, weeks: weeks.map((w) => ({ ...w, classes: [...w.classes] })) } : null);
                   setExpandedWeeks((p) => new Set([...p, d.number]));
                   break;
+                }
                 case "class": {
                   const wi = weeks.findIndex((w) => w.number === d.week);
                   if (wi >= 0) {
-                    weeks[wi] = { ...weeks[wi], classes: [...weeks[wi].classes, { number: d.number, title: d.title, description: d.description, assignments: [], references: [] }] };
-                    setCourse((p) => p ? { ...p, weeks: [...weeks] } : null);
-                    setExpandedClasses((p) => new Set([...p, `${d.week}-${d.number}`]));
+                    // Guard: if the backend ever repeats a class number within a
+                    // week, remap it to the next free positional slot so React
+                    // keys stay unique and Pass 2 can still address each class.
+                    const existingNumbers = new Set(weeks[wi].classes.map((c) => c.number));
+                    let num = d.number;
+                    if (num == null || existingNumbers.has(num)) {
+                      num = weeks[wi].classes.length + 1;
+                      while (existingNumbers.has(num)) num++;
+                    }
+                    const newClass: ClassItem = { number: num, title: d.title, description: d.description, assignments: [], references: [] };
+                    weeks = weeks.map((w, i) => i === wi ? { ...w, classes: [...w.classes, newClass] } : w);
+                    setCourse((p) => p ? { ...p, weeks: weeks.map((w) => ({ ...w, classes: [...w.classes] })) } : null);
+                    setExpandedClasses((p) => new Set([...p, `${d.week}-${num}`]));
                   }
                   break;
                 }
@@ -389,8 +423,11 @@ function MissionControlInner() {
                   if (wi >= 0) {
                     const ci = weeks[wi].classes.findIndex((c) => c.number === d.class);
                     if (ci >= 0) {
-                      weeks[wi].classes[ci] = { ...weeks[wi].classes[ci], assignments: [...weeks[wi].classes[ci].assignments, d] };
-                      setCourse((p) => p ? { ...p, weeks: [...weeks] } : null);
+                      weeks = weeks.map((w, i) => i === wi ? {
+                        ...w,
+                        classes: w.classes.map((c, j) => j === ci ? { ...c, assignments: [...c.assignments, d] } : c),
+                      } : w);
+                      setCourse((p) => p ? { ...p, weeks: weeks.map((w) => ({ ...w, classes: [...w.classes] })) } : null);
                     }
                   }
                   break;
@@ -399,25 +436,29 @@ function MissionControlInner() {
                   // Legacy: replace week skeleton with full content (single payload)
                   const wi = weeks.findIndex((w) => w.number === d.number);
                   if (wi >= 0) {
-                    weeks[wi] = d;
-                    setCourse((p) => p ? { ...p, weeks: [...weeks] } : null);
+                    const replaced: Week = { ...d, classes: [...(d.classes || [])] };
+                    weeks = weeks.map((w, i) => i === wi ? replaced : w);
+                    setCourse((p) => p ? { ...p, weeks: weeks.map((w) => ({ ...w, classes: [...w.classes] })) } : null);
                     setExpandedWeeks((p) => new Set([...p, d.number]));
                     for (const cl of d.classes || []) setExpandedClasses((p) => new Set([...p, `${d.number}-${cl.number}`]));
                   }
                   break;
                 }
                 case "week_content_class": {
-                  // Pass 2: receive one class at a time (avoids large payload drops)
+                  // Pass 2: receive one class at a time (avoids large payload drops).
                   const wcWi = weeks.findIndex((w) => w.number === d.week);
                   if (wcWi >= 0 && d.classData) {
                     const classNum = d.classData.number;
-                    const existingCi = weeks[wcWi].classes.findIndex((c) => c.number === classNum);
-                    if (existingCi >= 0) {
-                      weeks[wcWi].classes[existingCi] = d.classData;
-                    } else {
-                      weeks[wcWi].classes.push(d.classData);
-                    }
-                    setCourse((p) => p ? { ...p, weeks: [...weeks] } : null);
+                    const newClassData: ClassItem = { ...d.classData };
+                    weeks = weeks.map((w, i) => {
+                      if (i !== wcWi) return w;
+                      const existingCi = w.classes.findIndex((c) => c.number === classNum);
+                      const nextClasses = existingCi >= 0
+                        ? w.classes.map((c, j) => j === existingCi ? newClassData : c)
+                        : [...w.classes, newClassData];
+                      return { ...w, classes: nextClasses };
+                    });
+                    setCourse((p) => p ? { ...p, weeks: weeks.map((w) => ({ ...w, classes: [...w.classes] })) } : null);
                     setExpandedWeeks((p) => new Set([...p, d.week]));
                     setExpandedClasses((p) => new Set([...p, `${d.week}-${classNum}`]));
                   }
@@ -431,8 +472,21 @@ function MissionControlInner() {
                 case "done":
                   setIsStreaming(false);
                   if (d.course) {
-                    setCourse(d.course);
-                    expandAll(d.course);
+                    // Log unit counts per class — if any class shows 0 here but
+                    // backend logs said it "got N units", the SSE payload was
+                    // truncated or the backend merge mis-assigned it.
+                    const summary = (d.course.weeks || []).map((w: Week) =>
+                      `W${w.number}: [${(w.classes || []).map((c) => `C${c.number}=${(c as ClassItem).learning_units?.length ?? 0}u`).join(", ")}]`
+                    ).join(" | ");
+                    console.log("[SSE done] unit counts:", summary);
+                    // Deep-clone via JSON round-trip to break ALL shared references
+                    // from incremental SSE updates. Without this, React may reuse
+                    // cached child renders for classes whose arrays still point at
+                    // the mutated closure object, leaving Class 2 visibly empty.
+                    const freshCourse = JSON.parse(JSON.stringify(d.course));
+                    weeks = freshCourse.weeks || [];
+                    setCourse(freshCourse);
+                    expandAll(freshCourse);
                   }
                   // Show critic feedback if available
                   const critic = d.course?._critic;
@@ -448,7 +502,12 @@ function MissionControlInner() {
                   setMessages((p) => [...p, { role: "assistant", content: d.message }]);
                   break;
               }
-            } catch {}
+            } catch (err) {
+              // Silent parse failures mask real bugs (e.g., class 2 never showing
+              // up because its SSE data line was truncated). Log loudly.
+              const preview = line.length > 120 ? line.slice(0, 60) + "...(" + line.length + " chars)..." + line.slice(-40) : line;
+              console.error(`[SSE] parse failed for event="${evt}":`, err instanceof Error ? err.message : err, "| line preview:", preview);
+            }
             evt = "";
           }
         }
@@ -479,6 +538,26 @@ function MissionControlInner() {
         const [wn, cn] = rest.map(Number);
         const wi = u.weeks.findIndex((w) => w.number === wn);
         if (wi >= 0) { const ci = u.weeks[wi].classes.findIndex((c) => c.number === cn); if (ci >= 0) u.weeks[wi].classes[ci] = { ...u.weeks[wi].classes[ci], [type === "ct" ? "title" : "description"]: editVal }; }
+      }
+      // Learning unit fields: lu-<field>.<weekNum>.<classNum>.<unitIndex>
+      // field ∈ { title, content, duration, type }
+      else if (type.startsWith("lu-")) {
+        const field = type.slice(3); // "title" | "content" | "duration" | "type"
+        const [wn, cn, uiStr] = rest;
+        const wi = u.weeks.findIndex((w) => w.number === +wn);
+        if (wi >= 0) {
+          const ci = u.weeks[wi].classes.findIndex((c) => c.number === +cn);
+          if (ci >= 0) {
+            const units = [...(u.weeks[wi].classes[ci].learning_units || [])];
+            const unitIdx = +uiStr;
+            if (units[unitIdx]) {
+              const value: string | number =
+                field === "duration" ? (parseInt(editVal, 10) || 0) : editVal;
+              units[unitIdx] = { ...units[unitIdx], [field]: value };
+              u.weeks[wi].classes[ci] = { ...u.weeks[wi].classes[ci], learning_units: units };
+            }
+          }
+        }
       }
       return u;
     });
@@ -523,23 +602,61 @@ function MissionControlInner() {
     return <Tag className={className} style={{ ...style, cursor: "pointer" }} onClick={(e: any) => { e.stopPropagation(); startEdit(id, val); }} title="Click to edit">{val}<Pencil size={10} style={{ marginLeft: 4, opacity: 0.2, verticalAlign: "middle" }} /></Tag>;
   };
 
-  const UnitPreview = ({ unit, index, unitIcons, unitColors }: { unit: any; index: number; unitIcons: Record<string, string>; unitColors: Record<string, string> }) => {
+  const UnitPreview = ({ unit, index, weekNumber, classNumber, unitIcons, unitColors }: { unit: any; index: number; weekNumber: number; classNumber: number; unitIcons: Record<string, string>; unitColors: Record<string, string> }) => {
     const [open, setOpen] = useState(false);
+    const titleFieldId = `lu-title.${weekNumber}.${classNumber}.${index}`;
+    const durationFieldId = `lu-duration.${weekNumber}.${classNumber}.${index}`;
+    const contentFieldId = `lu-content.${weekNumber}.${classNumber}.${index}`;
+    const isEditingContent = editField === contentFieldId;
     return (
       <div style={{ borderBottom: "1px solid var(--border)" }}>
         <div onClick={() => setOpen(!open)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", cursor: "pointer", background: open ? "var(--bg-secondary)" : "var(--bg-primary)" }}>
           <span style={{ width: 24, height: 24, borderRadius: 6, background: (unitColors[unit.type] || "var(--text-tertiary)") + "18", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, flexShrink: 0 }}>
             {unitIcons[unit.type] || "•"}
           </span>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-heading)" }}>{unit.title}</span>
+          <div style={{ flex: 1, minWidth: 0 }} onClick={(e) => e.stopPropagation()}>
+            <Editable id={titleFieldId} val={unit.title || ""} style={{ fontSize: 12, fontWeight: 600, color: "var(--text-heading)" }} />
           </div>
           <span style={{ fontSize: 10, color: "var(--text-tertiary)", fontFamily: "var(--font-mono)", textTransform: "uppercase", flexShrink: 0 }}>{unit.type}</span>
-          <span style={{ fontSize: 10, color: "var(--text-tertiary)", fontFamily: "var(--font-mono)", flexShrink: 0 }}>{unit.duration || "?"}m</span>
+          <span onClick={(e) => e.stopPropagation()} style={{ display: "inline-flex", alignItems: "center", flexShrink: 0 }}>
+            <Editable id={durationFieldId} val={String(unit.duration ?? "")} style={{ fontSize: 10, color: "var(--text-tertiary)", fontFamily: "var(--font-mono)" }} />
+            <span style={{ fontSize: 10, color: "var(--text-tertiary)", fontFamily: "var(--font-mono)" }}>m</span>
+          </span>
           {open ? <ChevronDown size={12} color="var(--text-tertiary)" /> : <ChevronRight size={12} color="var(--text-tertiary)" />}
         </div>
-        {open && unit.content && (
+        {open && isEditingContent && (
+          <div style={{ padding: "12px 16px 12px 50px", background: "var(--bg-secondary)" }} onClick={(e) => e.stopPropagation()}>
+            <textarea
+              value={editVal}
+              onChange={(e) => setEditVal(e.target.value)}
+              className="input"
+              autoFocus
+              style={{ width: "100%", minHeight: 240, fontSize: 12, fontFamily: "var(--font-mono)", padding: 10, lineHeight: 1.6 }}
+              onKeyDown={(e) => { if (e.key === "Escape") cancelEdit(); }}
+            />
+            <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+              <button onClick={confirmEdit} className="btn" style={{ fontSize: 11, padding: "4px 10px", background: "var(--success)", color: "#fff" }}>Save (Ctrl+Enter)</button>
+              <button onClick={cancelEdit} className="btn" style={{ fontSize: 11, padding: "4px 10px" }}>Cancel</button>
+            </div>
+          </div>
+        )}
+        {open && !isEditingContent && (
           <div style={{ padding: "12px 16px 12px 50px", background: "var(--bg-secondary)", maxHeight: 300, overflowY: "auto" }}>
+            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 6 }}>
+              <button
+                onClick={(e) => { e.stopPropagation(); startEdit(contentFieldId, unit.content || ""); }}
+                className="btn"
+                style={{ fontSize: 10, padding: "3px 8px", display: "inline-flex", alignItems: "center", gap: 4 }}
+                title="Edit content"
+              >
+                <Pencil size={10} /> Edit content
+              </button>
+            </div>
+            {!unit.content && (
+              <div style={{ fontSize: 11, color: "var(--text-tertiary)", fontStyle: "italic", marginBottom: 8 }}>
+                No content yet — click &ldquo;Edit content&rdquo; above to add some.
+              </div>
+            )}
             <div
               style={{ fontSize: 12, lineHeight: 1.7, color: "var(--text-secondary)" }}
               dangerouslySetInnerHTML={{ __html: (unit.content || "")
@@ -674,7 +791,7 @@ function MissionControlInner() {
                                     {tOpen && (
                                       <div style={{ border: "1px solid var(--border)", borderTop: "none", borderRadius: "0 0 8px 8px", overflow: "hidden" }}>
                                         {cls.learning_units.map((unit: any, ui: number) => (
-                                          <UnitPreview key={ui} unit={unit} index={ui} unitIcons={unitIcons} unitColors={unitColors} />
+                                          <UnitPreview key={ui} unit={unit} index={ui} weekNumber={week.number} classNumber={cls.number} unitIcons={unitIcons} unitColors={unitColors} />
                                         ))}
                                       </div>
                                     )}
