@@ -20,7 +20,7 @@ export default function StudentsPage() {
 
   const loadData = () => {
     Promise.all([
-      fetch("http://localhost:8000/api/instructor/students").then((r) => r.json()),
+      fetchAPI("/instructor/students"),
       fetchAPI("/instructor/courses"),
     ]).then(([s, c]) => { setStudents(s); setCourses(c); }).finally(() => setLoading(false));
   };
@@ -31,17 +31,16 @@ export default function StudentsPage() {
     e.preventDefault();
     setInviting(true); setInvMsg("");
     try {
-      const res = await fetch("http://localhost:8000/api/auth/signup", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+      const data = await fetchAPI("/auth/signup", {
+        method: "POST",
         body: JSON.stringify({ name: invName, email: invEmail, password: invPassword }),
       });
-      const data = await res.json();
-      if (!res.ok) { setInvMsg(data.error || "Failed"); setInviting(false); return; }
+      if (data.error) { setInvMsg(data.error); setInviting(false); return; }
 
       // Enroll in course if selected
       if (invCourse && data.user?.id) {
-        await fetch(`http://localhost:8000/api/instructor/students/${data.user.id}/enroll`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
+        await fetchAPI(`/instructor/students/${data.user.id}/enroll`, {
+          method: "POST",
           body: JSON.stringify({ course_id: invCourse }),
         });
       }
@@ -56,8 +55,8 @@ export default function StudentsPage() {
   const handleEnroll = async (studentId: string) => {
     if (!enrollCourse) return;
     try {
-      await fetch(`http://localhost:8000/api/instructor/students/${studentId}/enroll`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+      await fetchAPI(`/instructor/students/${studentId}/enroll`, {
+        method: "POST",
         body: JSON.stringify({ course_id: enrollCourse }),
       });
       setEnrolling(null); setEnrollCourse("");

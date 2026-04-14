@@ -216,10 +216,10 @@ QUIZ unit (inline reinforcement, 3-5 questions):
 {"type":"quiz","title":"Check Your Understanding","duration":5,"content":"Test your understanding of the concepts just covered.","completion_type":"graded","questions":[{"type":"mcq","question":"What is X?","options":["A","B","C","D"],"correct":0,"explanation":"A is correct because..."},{"type":"fill_up","question":"The ___ is used to...","answer":"keyword","explanation":"Because..."}]}
 
 CHECKPOINT CODING unit (short 5-10 min exercise between concepts):
-{"type":"checkpoint_coding","title":"Try It: Quick Exercise","duration":8,"content":"Instructions for the exercise","completion_type":"graded","starter_code":"# 5-8 lines with ONE clear TODO\ndef solve(x):\n    # TODO: implement\n    pass\n\nprint(solve(5))","solution_code":"# Complete working solution\ndef solve(x):\n    return x * 2\n\nprint(solve(5))","test_cases":[{"input":"5","expected_output":"10","description":"basic case"}]}
+{"type":"checkpoint_coding","title":"Try It: Quick Exercise","duration":8,"content":"Instructions for the exercise","completion_type":"graded","function_name":"solve","starter_code":"# 5-8 lines with ONE clear TODO\ndef solve(x):\n    # TODO: implement\n    pass\n\nprint(solve(5))","solution_code":"# Complete working solution\ndef solve(x):\n    return x * 2\n\nprint(solve(5))","test_cases":[{"input":"5","expected_output":"10","description":"basic case"}]}
 
 GRADED ASSIGNMENT unit (full 30-60 min assessment, only at END of class):
-{"type":"graded_assignment","title":"Full Assignment Name","duration":45,"content":"Detailed assignment description and instructions","completion_type":"graded","starter_code":"# 10+ lines real code with TODOs","solution_code":"# Complete working solution","test_cases":[{"input":"...","expected_output":"...","description":"..."},{"input":"...","expected_output":"...","description":"edge case"}],"rubric":[{"criterion":"...","excellent":"...","acceptable":"...","poor":"...","weight":50}],"hints":["hint 1"],"pitfalls":["specific mistake"],"aha_moment":"key insight"}
+{"type":"graded_assignment","title":"Full Assignment Name","duration":45,"content":"Detailed assignment description and instructions","completion_type":"graded","function_name":"solve","starter_code":"# 10+ lines real code with TODOs","solution_code":"# Complete working solution","test_cases":[{"input":"...","expected_output":"...","description":"..."},{"input":"...","expected_output":"...","description":"edge case"}],"rubric":[{"criterion":"...","excellent":"...","acceptable":"...","poor":"...","weight":50}],"hints":["hint 1"],"pitfalls":["specific mistake"],"aha_moment":"key insight"}
 
 ### LEARNING UNIT RULES
 - EVERY unit MUST have "type", "title", "duration" (in minutes, never 0), and "content" (real text, not empty)
@@ -255,7 +255,12 @@ IDE (type:"ide"):
 - Quiz: 4+ questions, at least 3 different question types when possible, every question has an explanation
 - Pitfalls must be SPECIFIC ("Forgetting to close the DB connection"), not generic ("Not handling errors")
 - Aha moments must be GENUINE INSIGHTS that change how the student thinks, not restated objectives
-- test_cases input/expected_output must be actual values the function would receive and return`;
+- test_cases input/expected_output must be actual values the function would receive and return
+- Every coding exercise (checkpoint_coding, graded_assignment) MUST have "function_name" matching the function in starter_code
+- test_cases input/expected_output must be ACTUAL executable values — never descriptions like "should return X"
+- starter_code must be SELF-CONTAINED — include all mock data and helpers inline, never reference external modules
+- solution_code must be COMPLETE and must produce expected_output for every test_case when run
+- hints must be PROGRESSIVE (concept → approach → near-solution → pitfall), never give away the answer`;
 
 async function chat(messages, currentCourse, fileContent) {
   // Pick the focused prompt for the current mode.
@@ -510,6 +515,25 @@ function inferTypeFromSignals(unit) {
   return null;
 }
 
+function sanitizeTestCases(testCases) {
+  if (!Array.isArray(testCases)) return [];
+  return testCases.map((tc) => {
+    if (tc.input !== undefined && tc.input !== null && typeof tc.input !== "string") {
+      tc.input = JSON.stringify(tc.input);
+    }
+    if (tc.expected_output !== undefined && tc.expected_output !== null && typeof tc.expected_output !== "string") {
+      tc.expected_output = String(tc.expected_output);
+    }
+    tc.input = tc.input ?? "";
+    tc.expected_output = tc.expected_output ?? "";
+    tc.description = tc.description || "Test case";
+    if (tc.expected_output.length > 80 && /should|must|will|the function|returns/i.test(tc.expected_output)) {
+      console.warn(`⚠ Test case "${tc.description}" expected_output looks like a description: "${tc.expected_output.slice(0, 50)}..."`);
+    }
+    return tc;
+  });
+}
+
 function postProcessLearningUnits(units, courseTitle) {
   return (units || []).map((unit) => {
     // Safety net: if Gemini mislabeled (e.g., everything as "video"), infer the
@@ -530,6 +554,13 @@ function postProcessLearningUnits(units, courseTitle) {
       unit.solution_code = unit.solution_code || unit.starter_code;
       unit.test_cases = unit.test_cases || [];
       unit.completion_type = "graded";
+      if (!unit.function_name) {
+        const m = (unit.starter_code || "").match(/function\s+(\w+)\s*\(/) ||
+                  (unit.starter_code || "").match(/def\s+(\w+)\s*\(/) ||
+                  (unit.starter_code || "").match(/(?:const|let|var)\s+(\w+)\s*=\s*(?:function|\()/);
+        unit.function_name = m ? m[1] : "solve";
+      }
+      unit.test_cases = sanitizeTestCases(unit.test_cases);
     }
 
     // Ensure graded_assignment has all required fields
@@ -544,6 +575,13 @@ function postProcessLearningUnits(units, courseTitle) {
       unit.pitfalls = unit.pitfalls || [];
       unit.aha_moment = unit.aha_moment || "";
       unit.completion_type = "graded";
+      if (!unit.function_name) {
+        const m = (unit.starter_code || "").match(/function\s+(\w+)\s*\(/) ||
+                  (unit.starter_code || "").match(/def\s+(\w+)\s*\(/) ||
+                  (unit.starter_code || "").match(/(?:const|let|var)\s+(\w+)\s*=\s*(?:function|\()/);
+        unit.function_name = m ? m[1] : "solve";
+      }
+      unit.test_cases = sanitizeTestCases(unit.test_cases);
     }
 
     // Quiz types need questions — demote to activity if the LLM skipped them
@@ -661,18 +699,60 @@ checkpoint_quiz (type: "checkpoint_quiz"):
   Example title patterns: "Quick Check:", "Knowledge Check:", "Test Your Understanding"
 
 checkpoint_coding (type: "checkpoint_coding"):
-  When to use: After a reading that explains a concept, let the student practice it immediately
-  Required fields: starter_code (5-8 lines with ONE TODO), solution_code, test_cases (2-3)
-  Duration: 5-10 minutes
-  completion_type: "graded"
-  Example title patterns: "Try It:", "Implement:", "Code Challenge:", "Practice:"
+  When to use: After a reading/video to let student practice immediately
+  Duration: 5-10 min. completion_type: "graded"
+  Title patterns: "Try It:", "Implement:", "Code Challenge:", "Practice:"
+
+  REQUIRED FIELDS:
+  - function_name: EXACT name of the function (must match starter_code)
+  - starter_code: SELF-CONTAINED code. Include ALL mock data/objects/helpers inline.
+    Must define a function with the exact function_name.
+    End with: console.log(functionName(sampleArg)) or print(function_name(sample_arg))
+  - solution_code: complete working solution that passes ALL test_cases
+  - test_cases: 2-3 cases. Each has:
+    * input: exact argument(s) as STRING. "" for no-arg. "5" for number. "\"hello\"" for string.
+    * expected_output: exact RETURN VALUE as STRING. NOT what it prints. NOT a description.
+    * description: what this tests
+
+  BAD test_cases (will BREAK the IDE):
+    {"input": "call the function", "expected_output": "should return the error message"}
+  GOOD test_cases (will WORK in the IDE):
+    {"input": "", "expected_output": "Database Connection Failed", "description": "retrieves error text"}
 
 graded_assignment (type: "graded_assignment"):
-  When to use: ONLY as the LAST unit of the class — the full assessment
-  Required fields: starter_code (10+ lines), solution_code, test_cases (3+), rubric (weights sum to 100), hints, pitfalls, aha_moment
-  Duration: 30-60 minutes
-  completion_type: "graded"
-  Example title patterns: "Build:", "Project:", "Assignment:", "Capstone:"
+  When to use: ONLY last unit of class. Duration: 30-60 min. completion_type: "graded"
+  Title patterns: "Build:", "Project:", "Assignment:", "Capstone:"
+
+  REQUIRED FIELDS:
+  - function_name: EXACT name of the function student implements
+  - starter_code: 10+ lines, SELF-CONTAINED. Structure:
+    1. Mock data/objects/sample arrays the function needs
+    2. Function signature with parameter names + type comments
+    3. TODO comments for each step (minimum 3 TODOs)
+    4. Test call at bottom: console.log(functionName(sampleInput))
+  - solution_code: COMPLETE working solution. Must produce expected_output for EVERY test_case.
+  - test_cases: 3-5 cases:
+    * First 2-3: visible (is_hidden: false)
+    * Last 1-2: hidden (is_hidden: true) — edge cases
+    * input: exact argument(s) as STRING. expected_output: exact RETURN VALUE as STRING.
+    * NEVER descriptions — ALWAYS actual values
+  - hints: 3-4 PROGRESSIVE hints (guide without giving the answer):
+    * Hint 1: Which concept/approach to use (high-level)
+    * Hint 2: A specific method or pattern to apply
+    * Hint 3: What to watch out for (near-solution nudge)
+    * Hint 4: Most common mistake to avoid
+    BAD: ["Use querySelector", "Handle null", "Return textContent"]
+    GOOD: ["Think about how CSS selectors work — the simulated DOM uses the same syntax",
+           "querySelector returns null when nothing matches — plan for that case",
+           "textContent is a property, not a method — no parentheses needed",
+           "Empty string textContent is different from null — both are falsy but mean different things"]
+  - pitfalls: 2-3 SPECIFIC mistakes:
+    BAD: ["Not handling errors"]
+    GOOD: ["Using .class instead of #id in querySelector — it uses CSS selector syntax"]
+  - aha_moment: ONE genuine insight (not a restated objective):
+    BAD: "Understanding DOM manipulation"
+    GOOD: "querySelector uses the same CSS selectors from your stylesheets — #id, .class, tag"
+  - rubric: 2-4 criteria, weights sum to 100
 
 activity (type: "activity"):
   When to use: When students need to do something that can't be auto-graded (research, discuss, explore)
@@ -762,6 +842,7 @@ learning_units format (7-10 items following the STRUCTURE PATTERN above):
   },
   { "type":"reading", "title":"Deep Dive: [Concept A] in Practice", "duration":15, "content":"# Heading\\n\\nFULL 800+ word markdown with code blocks, pro tips, common mistakes...", "completion_type":"auto" },
   { "type":"checkpoint_coding", "title":"Try It: Implement [Small Task]", "duration":8, "content":"Write a function that does [specific small task].", "completion_type":"graded",
+    "function_name":"task",
     "starter_code":"def task(input):\\n    # TODO: implement [one specific thing]\\n    pass\\n\\nprint(task('test'))", "solution_code":"def task(input):\\n    return input.upper()\\n\\nprint(task('test'))",
     "test_cases":[{"input":"hello","expected_output":"HELLO","description":"basic case"},{"input":"","expected_output":"","description":"empty string edge case"}]
   },
@@ -774,6 +855,7 @@ learning_units format (7-10 items following the STRUCTURE PATTERN above):
   },
   { "type":"reading", "title":"Summary: Key Takeaways and Common Pitfalls", "duration":8, "content":"# What You Learned\\n\\nMarkdown summary of both concepts, common mistakes to avoid, what is coming next...", "completion_type":"auto" },
   { "type":"graded_assignment", "title":"Build: [Full Exercise Name]", "duration":40, "content":"Full assignment combining concepts A and B. Detailed instructions...", "completion_type":"graded",
+    "function_name":"solve",
     "starter_code":"# 10+ lines with clear TODOs\\ndef solve(data):\\n    # TODO Step 1: process with concept A\\n    # TODO Step 2: apply concept B\\n    # TODO Step 3: combine and return result\\n    pass\\n\\nprint(solve(sample_data))",
     "solution_code":"# Complete working solution\\ndef solve(data):\\n    step1 = process_a(data)\\n    step2 = apply_b(step1)\\n    return combine(step1, step2)\\n\\nprint(solve(sample_data))",
     "test_cases":[{"input":"test_data","expected_output":"expected","description":"basic case"},{"input":"edge_data","expected_output":"edge_expected","description":"edge case"},{"input":"empty","expected_output":"default","description":"empty input"}],
@@ -992,6 +1074,7 @@ Rules:
           difficulty: u.difficulty || "Intermediate",
           starter_code: u.starter_code || "",
           solution_code: u.solution_code || "",
+          function_name: u.function_name || "solve",
           test_cases: u.test_cases || [],
           rubric: u.rubric || [],
           hints: u.hints || [],

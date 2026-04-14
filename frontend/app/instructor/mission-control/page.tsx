@@ -25,7 +25,7 @@ const UNIT_TEMPLATES: Record<string, LearningUnit> = {
   graded_assignment: { type: "graded_assignment", title: "Build: New Assignment", duration: 40, content: "" },
 };
 
-const API = "http://localhost:8000/api";
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
 
 interface Message { role: "user" | "assistant" | "system"; content: string; }
 interface Assignment { title: string; description: string; type: string; difficulty: string; starter_code?: string; hints?: string[]; pitfalls?: string[]; aha_moment?: string; questions?: any[]; files?: any[]; test_cases?: any[]; rubric?: any[]; [k: string]: any; }

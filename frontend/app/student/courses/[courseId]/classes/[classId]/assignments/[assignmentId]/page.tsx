@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, Suspense } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { fetchAPI } from "@/lib/api";
-import { Send, Play, Upload, X, ChevronDown, ChevronUp, CheckCircle, Circle, ArrowRight } from "lucide-react";
+import { Send, Play, Upload, X, ChevronDown, ChevronUp, CheckCircle, Circle, ArrowRight, ArrowLeft, Lightbulb, Lock } from "lucide-react";
 import dynamic from "next/dynamic";
 
 const Editor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
@@ -388,8 +388,7 @@ function CodingSandbox({ assignment, courseId, classId, assignmentId }: { assign
   const [running, setRunning] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<GradingResult | null>(null);
-  const [showHints, setShowHints] = useState(false);
-  const [showSolution, setShowSolution] = useState(false);
+  const [hintsRevealed, setHintsRevealed] = useState(0);
   const [solutionCode, setSolutionCode] = useState<string | null>(null);
   const [solutionLoading, setSolutionLoading] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([{ role: "assistant", content: "I can see your assignment and code. Ask me anything — I'll guide you without spoiling the solution." }]);
@@ -397,14 +396,20 @@ function CodingSandbox({ assignment, courseId, classId, assignmentId }: { assign
   const [chatLoading, setChatLoading] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
+  const [leftTab, setLeftTab] = useState<"description" | "hints" | "companion">("description");
+  const [bottomTab, setBottomTab] = useState<"tests" | "console">("tests");
+  const [bottomOpen, setBottomOpen] = useState(false);
+
   const handleGetSolution = async () => {
-    if (solutionCode !== null) { setShowSolution(!showSolution); return; }
+    if (!confirm("Load the reference solution into the editor? This will replace your current code.")) return;
+    if (solutionCode) { setCode(solutionCode); return; }
     setSolutionLoading(true);
     try {
       const data = await fetchAPI(`/trainee/assignments/${assignmentId}/solution`);
-      setSolutionCode(data.solution_code || "// No solution available");
-      setShowSolution(true);
-    } catch { setSolutionCode("// Failed to load solution"); setShowSolution(true); }
+      const sc = data.solution_code || "// No solution available";
+      setSolutionCode(sc);
+      setCode(sc);
+    } catch { alert("Failed to load solution."); }
     finally { setSolutionLoading(false); }
   };
 
@@ -438,16 +443,16 @@ function CodingSandbox({ assignment, courseId, classId, assignmentId }: { assign
   }, [code, assignment, chatLoading]);
 
   const handleRun = async () => {
-    setRunning(true); setRunOutput(null);
+    setRunning(true); setRunOutput(null); setBottomTab("console"); setBottomOpen(true);
     try { const r = await fetchAPI("/trainee/run", { method: "POST", body: JSON.stringify({ code, language: langInfo.language }) }); setRunOutput({ stdout: r.stdout || "", stderr: r.stderr || "" }); }
     catch { setRunOutput({ stdout: "", stderr: "Failed to execute." }); }
     finally { setRunning(false); }
   };
 
   const handleSubmit = async () => {
-    setSubmitting(true); setResult(null);
+    setSubmitting(true); setResult(null); setBottomTab("tests"); setBottomOpen(true);
     try { const d = await fetchAPI("/trainee/submit", { method: "POST", body: JSON.stringify({ course_id: courseId, class_id: classId, assignment_id: assignmentId, code, assignment_type: "coding", language: langInfo.language }) }); setResult(d); }
-    catch { alert("Grading failed."); }
+    catch { setResult({ overall_score: 0, grade: "F", criterion_scores: [], overall_feedback: "Submission failed. Please try again.", strengths: [], improvements: [] }); }
     finally { setSubmitting(false); }
   };
 
@@ -462,165 +467,308 @@ function CodingSandbox({ assignment, courseId, classId, assignmentId }: { assign
 
   const scoreColor = (s: number) => s >= 80 ? "var(--success)" : s >= 60 ? "var(--warning)" : "var(--danger)";
 
+  const hints = assignment.hints || [];
+  const pitfalls = assignment.pitfalls || [];
+  const testCases = assignment.test_cases || [];
+  const visibleCases = testCases.filter((tc: any) => !tc.is_hidden);
+  const accepted = !!result && result.overall_score >= 80;
+  const diff = (assignment.difficulty || "").toLowerCase();
+  const badgeClass = diff.includes("easy") || diff.includes("begin") ? "badge-success" : diff.includes("hard") || diff.includes("advanced") ? "badge-danger" : "badge-warning";
+
   return (
-    <div className="theme-dark" style={{ background: "var(--bg-primary)", color: "var(--text-primary)", minHeight: "100vh" }}>
-      <Breadcrumb assignment={assignment} courseId={courseId} classId={classId} dark />
-
-      <div style={{ display: "flex", height: "calc(100vh - 44px)", overflow: "hidden" }}>
-        {/* Left — Brief */}
-        <div style={{ width: "25%", borderRight: "1px solid var(--border)", overflowY: "auto", padding: "24px 20px", background: "var(--bg-secondary)" }}>
-          <span className="overline" style={{ display: "block", marginBottom: 12 }}>ASSIGNMENT</span>
-          <h2 className="display-heading" style={{ fontSize: 18, marginBottom: 8 }}>{assignment.title}</h2>
-          <div style={{ marginBottom: 16 }}><span className="badge badge-neutral">{assignment.difficulty}</span></div>
-          <p style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6, marginBottom: 20 }}>{assignment.description}</p>
-
-          {assignment.test_cases?.length > 0 && (
-            <>
-              <span className="overline" style={{ display: "block", marginBottom: 10 }}>TEST CASES</span>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 20 }}>
-                {assignment.test_cases.map((tc: any, i: number) => (
-                  <div key={i} style={{ background: "var(--bg-tertiary)", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 12px", fontSize: 12 }}>
-                    <span style={{ color: "var(--text-tertiary)" }}>{tc.description || `Test ${i + 1}`}</span>
-                    <div style={{ fontFamily: "var(--font-mono)", color: "var(--text-secondary)", marginTop: 4 }}>Expected: <span style={{ color: "var(--success)" }}>{tc.expected_output}</span></div>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-
-          <button onClick={() => setShowHints(!showHints)} style={{ background: "transparent", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 12px", color: "var(--text-secondary)", fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, width: "100%", fontFamily: "var(--font-body)" }}>
-            {showHints ? <ChevronUp size={14} /> : <ChevronDown size={14} />} {showHints ? "Hide" : "Show"} hints
+    <div className="theme-dark" style={{ background: "var(--bg-primary)", color: "var(--text-primary)", height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      {/* ═══ TOP BAR ═══ */}
+      <div style={{ height: 52, borderBottom: "1px solid var(--border)", background: "var(--bg-secondary)", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 16px", flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0, flex: 1 }}>
+          <Link href={`/student/courses/${courseId}/classes/${classId}`} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 30, height: 30, borderRadius: 8, color: "var(--text-secondary)", border: "1px solid var(--border)", flexShrink: 0, textDecoration: "none" }} aria-label="Back">
+            <ArrowLeft size={15} />
+          </Link>
+          <div style={{ minWidth: 0, display: "flex", alignItems: "baseline", gap: 8, overflow: "hidden" }}>
+            <span style={{ fontSize: 12, color: "var(--text-tertiary)", whiteSpace: "nowrap" }}>{assignment.class_title}</span>
+            <span style={{ color: "var(--text-tertiary)" }}>/</span>
+            <span className="display-heading" style={{ fontSize: 15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{assignment.title}</span>
+          </div>
+          <span className={`badge ${badgeClass}`} style={{ flexShrink: 0 }}>{assignment.difficulty}</span>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+          <button onClick={handleGetSolution} disabled={solutionLoading || running || submitting} style={{ padding: "7px 14px", fontSize: 13, borderRadius: 8, background: "transparent", border: "1px solid var(--border)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "var(--font-body)" }}>
+            {solutionLoading ? "Loading..." : "Get Solution"}
           </button>
-          {showHints && (
-            <div style={{ marginTop: 12 }}>
-              {assignment.hints?.length > 0 && <HintBox items={assignment.hints} label="Hints" color="var(--accent)" bg="var(--accent-subtle)" />}
-              {assignment.pitfalls?.length > 0 && <HintBox items={assignment.pitfalls} label="Pitfalls" color="var(--danger)" bg="var(--danger-bg)" />}
-              {assignment.aha_moment && <HintBox items={[assignment.aha_moment]} label="Aha Moment" color="var(--success)" bg="var(--success-bg)" />}
-            </div>
-          )}
-
-          {assignment.rubric?.length > 0 && (
-            <>
-              <span className="overline" style={{ display: "block", marginTop: 20, marginBottom: 10 }}>RUBRIC</span>
-              {assignment.rubric.map((r: any, i: number) => (
-                <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "4px 0" }}>
-                  <span style={{ color: "var(--text-secondary)" }}>{r.criterion}</span>
-                  <span style={{ fontFamily: "var(--font-mono)", color: "var(--text-tertiary)" }}>{r.weight}%</span>
-                </div>
-              ))}
-            </>
-          )}
-        </div>
-
-        {/* Center — Editor */}
-        <div style={{ width: "50%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-          <div style={{ background: "var(--bg-tertiary)", borderBottom: "1px solid var(--border)", padding: "8px 16px", fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text-secondary)" }}>{langInfo.filename}</div>
-          <div style={{ flex: 1, minHeight: 0 }}>
-            <Editor height="100%" language={langInfo.monacoLang} theme="vs-dark" value={code} onChange={(v) => setCode(v || "")} options={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, minimap: { enabled: false }, padding: { top: 16 }, scrollBeyondLastLine: false, lineNumbers: "on", renderLineHighlight: "gutter" }} />
-          </div>
-          {runOutput && (
-            <div style={{ background: "var(--bg-tertiary)", borderTop: "1px solid var(--border)", padding: "12px 16px", minHeight: 80, maxHeight: 200, overflowY: "auto", flexShrink: 0 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-                <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--text-tertiary)", textTransform: "uppercase" }}>Output</span>
-                <button onClick={() => setRunOutput(null)} style={{ background: "transparent", border: "none", cursor: "pointer", color: "var(--text-tertiary)" }}><X size={14} /></button>
-              </div>
-              {runOutput.stdout && <pre style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--success)", whiteSpace: "pre-wrap" }}>{runOutput.stdout}</pre>}
-              {runOutput.stderr && <pre style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--danger)", whiteSpace: "pre-wrap" }}>{runOutput.stderr}</pre>}
-              {!runOutput.stdout && !runOutput.stderr && <pre style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text-tertiary)", whiteSpace: "pre-wrap" }}>No output</pre>}
-            </div>
-          )}
-          {/* Solution panel (hidden until requested) */}
-          {showSolution && solutionCode && (
-            <div style={{ background: "#1a2332", borderTop: "1px solid var(--border)", padding: "12px 16px", minHeight: 80, maxHeight: 200, overflowY: "auto", flexShrink: 0 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-                <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--accent)", textTransform: "uppercase" }}>Solution</span>
-                <button onClick={() => setShowSolution(false)} style={{ background: "transparent", border: "none", cursor: "pointer", color: "var(--text-tertiary)" }}><X size={14} /></button>
-              </div>
-              <pre style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "#a3e635", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{solutionCode}</pre>
-            </div>
-          )}
-          <div style={{ display: "flex", gap: 10, padding: "12px 16px", borderTop: "1px solid var(--border)", background: "var(--bg-secondary)" }}>
-            <button className="btn-secondary" onClick={handleRun} disabled={running} style={{ flex: 1 }}><Play size={14} /> {running ? "Running..." : "Run Code"}</button>
-            <button className="btn-primary" onClick={handleSubmit} disabled={submitting} style={{ flex: 1 }}><Upload size={14} /> {submitting ? "Grading..." : "Submit"}</button>
-            <button onClick={handleGetSolution} disabled={solutionLoading} style={{ background: "none", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 14px", cursor: "pointer", color: showSolution ? "var(--accent)" : "var(--text-tertiary)", fontSize: 12, fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>
-              {solutionLoading ? "..." : showSolution ? "Hide Solution" : "Get Solution"}
-            </button>
-          </div>
-        </div>
-
-        {/* Right — AI Companion */}
-        <div style={{ width: "25%", borderLeft: "1px solid var(--border)", display: "flex", flexDirection: "column", background: "var(--bg-secondary)" }}>
-          {/* Problems section */}
-          <div style={{ padding: "16px 16px 12px", borderBottom: "1px solid var(--border)", overflowY: "auto", maxHeight: "40%", flexShrink: 0 }}>
-            <span className="overline" style={{ display: "block", marginBottom: 10 }}>PROBLEMS</span>
-            {assignment.test_cases?.length > 0 ? (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: assignment.pitfalls?.length ? 12 : 0 }}>
-                {assignment.test_cases.map((tc: any, i: number) => (
-                  <div key={i} style={{ background: "var(--bg-tertiary)", border: "1px solid var(--border)", borderRadius: 6, padding: "6px 10px", fontSize: 12 }}>
-                    <span style={{ color: "var(--text-secondary)" }}>{tc.description || `Test ${i + 1}`}</span>
-                    {tc.input && <div style={{ fontFamily: "var(--font-mono)", color: "var(--text-tertiary)", marginTop: 2, fontSize: 11 }}>Input: {tc.input}</div>}
-                    <div style={{ fontFamily: "var(--font-mono)", color: "var(--success)", marginTop: 2, fontSize: 11 }}>Expected: {tc.expected_output}</div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div style={{ background: "var(--bg-tertiary)", border: "1px solid var(--border)", borderRadius: 6, padding: "10px 12px", fontSize: 12 }}>
-                <p style={{ color: "var(--text-secondary)", lineHeight: 1.5, marginBottom: 8 }}>{assignment.description}</p>
-                {assignment.rubric?.length > 0 && (
-                  <div style={{ borderTop: "1px solid var(--border)", paddingTop: 8, marginTop: 4 }}>
-                    <span style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--text-tertiary)", fontWeight: 600 }}>Grading Criteria</span>
-                    {assignment.rubric.map((r: any, i: number) => (
-                      <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "3px 0", color: "var(--text-secondary)" }}>
-                        <span>{r.criterion}</span>
-                        <span style={{ fontFamily: "var(--font-mono)", color: "var(--text-tertiary)" }}>{r.weight}%</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {!assignment.rubric?.length && (
-                  <p style={{ color: "var(--text-tertiary)", fontSize: 11, fontStyle: "italic" }}>No test cases defined. Your code will be evaluated by AI.</p>
-                )}
-              </div>
-            )}
-            {assignment.pitfalls?.length > 0 && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 8 }}>
-                {assignment.pitfalls.map((p, i) => (
-                  <div key={i} style={{ display: "flex", gap: 6, alignItems: "flex-start", fontSize: 12, color: "var(--danger)", padding: "4px 0" }}>
-                    <span style={{ flexShrink: 0, marginTop: 1 }}>!</span>
-                    <span style={{ color: "var(--text-secondary)" }}>{p}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: "16px 16px 16px", minHeight: 0 }}>
-            <span className="overline" style={{ marginBottom: 12 }}>AI COMPANION</span>
-            <div style={{ flex: 1, overflowY: "auto", marginBottom: 12 }}>
-            {messages.map((msg, i) => (
-              <div key={i} style={{ display: "flex", justifyContent: msg.role === "user" ? "flex-end" : "flex-start", marginBottom: 10 }}>
-                <div style={{ maxWidth: "90%", padding: "8px 12px", borderRadius: 10, fontSize: 13, lineHeight: 1.5, ...(msg.role === "user" ? { background: "var(--bg-tertiary)", color: "var(--text-primary)" } : { color: "var(--text-secondary)" }) }}>{msg.content}</div>
-              </div>
-            ))}
-            {chatLoading && <span className="animate-pulse-slow" style={{ fontSize: 13, color: "var(--text-tertiary)" }}>Thinking...</span>}
-            <div ref={chatEndRef} />
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <textarea className="input" value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleChat(); } }} placeholder="Ask your companion..." rows={2} style={{ resize: "none", flex: 1, fontSize: 13 }} />
-            <button className="btn-primary" onClick={handleChat} disabled={chatLoading || !chatInput.trim()} style={{ padding: "8px 12px", borderRadius: 8 }}><Send size={14} /></button>
-          </div>
-          </div>
+          <button className="btn-secondary" onClick={handleRun} disabled={running || submitting}>
+            <Play size={14} /> {running ? "Running..." : "Run Code"}
+          </button>
+          <button className="btn-primary" onClick={handleSubmit} disabled={running || submitting}>
+            <Upload size={14} /> {submitting ? "Submitting..." : "Submit"}
+          </button>
         </div>
       </div>
 
-      {(submitting || result) && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center" }}>
-          {submitting && !result ? (
-            <h2 className="display-heading animate-pulse-slow" style={{ fontSize: 28 }}>Evaluating...</h2>
-          ) : result ? (
-            <GradingOverlay result={result} onClose={() => setResult(null)} />
-          ) : null}
+      {/* ═══ 2-PANEL AREA ═══ */}
+      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+        {/* ── LEFT PANEL (40%) ── */}
+        <div style={{ width: "40%", minWidth: 360, borderRight: "1px solid var(--border)", background: "var(--bg-secondary)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          {/* Tabs */}
+          <div style={{ display: "flex", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+            {([
+              { id: "description", label: "Description" },
+              { id: "hints", label: "Hints" },
+              { id: "companion", label: "AI Companion" },
+            ] as const).map((t) => {
+              const active = leftTab === t.id;
+              return (
+                <button key={t.id} onClick={() => setLeftTab(t.id)} style={{ background: "transparent", border: "none", padding: "12px 18px", fontSize: 13, fontWeight: active ? 600 : 500, color: active ? "var(--accent)" : "var(--text-secondary)", borderBottom: `2px solid ${active ? "var(--accent)" : "transparent"}`, cursor: "pointer", fontFamily: "var(--font-body)", marginBottom: -1 }}>
+                  {t.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Tab content */}
+          <div style={{ flex: 1, overflowY: "auto" }}>
+            {leftTab === "description" && (
+              <div style={{ padding: "22px 20px" }}>
+                <h2 className="display-heading" style={{ fontSize: 20, marginBottom: 12 }}>{assignment.title}</h2>
+                <p style={{ fontSize: 14, color: "var(--text-secondary)", lineHeight: 1.7, marginBottom: 20, whiteSpace: "pre-wrap" }}>{assignment.description}</p>
+
+                {visibleCases.length > 0 && (
+                  <>
+                    <span className="overline" style={{ display: "block", marginBottom: 10 }}>Examples</span>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 20 }}>
+                      {visibleCases.map((tc: any, i: number) => (
+                        <div key={i} style={{ background: "var(--bg-tertiary)", border: "1px solid var(--border)", borderRadius: 10, padding: "12px 14px" }}>
+                          <div style={{ fontSize: 11, color: "var(--text-tertiary)", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600, marginBottom: 8 }}>
+                            Example {i + 1}{tc.description ? ` — ${tc.description}` : ""}
+                          </div>
+                          {tc.input != null && tc.input !== "" && (
+                            <div style={{ marginTop: 4 }}>
+                              <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: "var(--text-tertiary)", marginRight: 8, textTransform: "uppercase" }}>Input:</span>
+                              <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, color: "var(--text-primary)" }}>{String(tc.input)}</span>
+                            </div>
+                          )}
+                          <div style={{ marginTop: 4 }}>
+                            <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: "var(--text-tertiary)", marginRight: 8, textTransform: "uppercase" }}>Output:</span>
+                            <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, color: "var(--success)" }}>{String(tc.expected_output)}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+
+                {pitfalls.length > 0 && (
+                  <div style={{ borderLeft: "3px solid var(--danger)", background: "var(--danger-bg)", padding: "12px 14px", borderRadius: "0 8px 8px 0", marginBottom: 16 }}>
+                    <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--danger)", fontWeight: 700, marginBottom: 6 }}>Pitfalls</div>
+                    {pitfalls.map((p: string, i: number) => (
+                      <p key={i} style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6, marginTop: i === 0 ? 0 : 4 }}>{p}</p>
+                    ))}
+                  </div>
+                )}
+
+                {assignment.aha_moment && (
+                  <div style={{ borderLeft: "3px solid var(--success)", background: "var(--success-bg)", padding: "12px 14px", borderRadius: "0 8px 8px 0" }}>
+                    <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--success)", fontWeight: 700, marginBottom: 6 }}>Key Insight</div>
+                    <p style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6 }}>{assignment.aha_moment}</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {leftTab === "hints" && (
+              <div style={{ padding: "22px 20px" }}>
+                {hints.length === 0 ? (
+                  <p style={{ fontSize: 13, color: "var(--text-tertiary)" }}>No hints available. Try the AI Companion tab.</p>
+                ) : (
+                  <>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
+                      {hints.map((h: string, i: number) => {
+                        const revealed = i < hintsRevealed;
+                        return (
+                          <div key={i} style={{ border: "1px solid var(--border)", borderLeft: `3px solid ${revealed ? "var(--accent)" : "var(--border)"}`, background: revealed ? "var(--accent-subtle)" : "var(--bg-tertiary)", padding: "12px 14px", borderRadius: "0 10px 10px 0" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: revealed ? 6 : 0 }}>
+                              {revealed ? <Lightbulb size={13} color="var(--accent)" /> : <Lock size={13} color="var(--text-tertiary)" />}
+                              <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, color: revealed ? "var(--accent)" : "var(--text-tertiary)" }}>Hint {i + 1}</span>
+                            </div>
+                            {revealed && <p style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6 }}>{h}</p>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {hintsRevealed < hints.length && (
+                      <button className="btn-secondary" onClick={() => setHintsRevealed((r) => Math.min(r + 1, hints.length))} style={{ width: "100%" }}>
+                        <Lightbulb size={14} /> Reveal hint {hintsRevealed + 1} of {hints.length}
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
+            {leftTab === "companion" && (
+              <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+                <div style={{ flex: 1, overflowY: "auto", padding: "18px 20px" }}>
+                  {messages.map((msg, i) => (
+                    <div key={i} style={{ display: "flex", justifyContent: msg.role === "user" ? "flex-end" : "flex-start", marginBottom: 10 }}>
+                      <div style={{ maxWidth: "88%", padding: "10px 14px", borderRadius: 12, fontSize: 13, lineHeight: 1.55, whiteSpace: "pre-wrap", ...(msg.role === "user" ? { background: "var(--accent)", color: "#fff", borderBottomRightRadius: 4 } : { background: "var(--bg-tertiary)", border: "1px solid var(--border)", color: "var(--text-secondary)", borderBottomLeftRadius: 4 }) }}>{msg.content}</div>
+                    </div>
+                  ))}
+                  {chatLoading && <span className="animate-pulse-slow" style={{ fontSize: 13, color: "var(--text-tertiary)" }}>Thinking...</span>}
+                  <div ref={chatEndRef} />
+                </div>
+                <div style={{ borderTop: "1px solid var(--border)", padding: "12px 14px", display: "flex", gap: 8, alignItems: "flex-end", flexShrink: 0 }}>
+                  <textarea className="input" value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleChat(); } }} placeholder="Ask your companion..." rows={2} style={{ resize: "none", flex: 1, fontSize: 13 }} />
+                  <button className="btn-primary" onClick={handleChat} disabled={chatLoading || !chatInput.trim()} style={{ padding: "10px 12px" }} aria-label="Send"><Send size={14} /></button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
-      )}
+
+        {/* ── RIGHT PANEL (60%) ── */}
+        <div style={{ width: "60%", minWidth: 480, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          {/* File tab */}
+          <div style={{ background: "var(--bg-tertiary)", borderBottom: "1px solid var(--border)", padding: "8px 16px", fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text-secondary)", flexShrink: 0 }}>
+            {langInfo.filename}
+          </div>
+
+          {/* Monaco editor — shrinks when bottom panel opens */}
+          <div style={{ flex: bottomOpen ? 0.65 : 1, minHeight: 0 }}>
+            <Editor height="100%" language={langInfo.monacoLang} theme="vs-dark" value={code} onChange={(v) => setCode(v || "")} options={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, minimap: { enabled: false }, padding: { top: 16 }, scrollBeyondLastLine: false, lineNumbers: "on", renderLineHighlight: "gutter" }} />
+          </div>
+
+          {/* Bottom panel — collapsed bar by default */}
+          <div style={{ borderTop: "1px solid var(--border)", background: "var(--bg-secondary)", display: "flex", flexDirection: "column", flexGrow: bottomOpen ? 0.35 : 0, flexShrink: 0, flexBasis: bottomOpen ? "0%" : "auto", minHeight: bottomOpen ? 160 : "auto" }}>
+            {/* Header */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: bottomOpen ? "1px solid var(--border)" : "none", flexShrink: 0 }}>
+              <div style={{ display: "flex" }}>
+                {(["tests", "console"] as const).map((t) => {
+                  const active = bottomTab === t;
+                  const label = t === "tests" ? "Test Results" : "Console";
+                  return (
+                    <button key={t} onClick={() => { setBottomTab(t); setBottomOpen(true); }} style={{ background: "transparent", border: "none", padding: "10px 16px", fontSize: 13, fontWeight: active ? 600 : 500, color: active ? "var(--accent)" : "var(--text-secondary)", borderBottom: `2px solid ${active ? "var(--accent)" : "transparent"}`, cursor: "pointer", fontFamily: "var(--font-body)", marginBottom: -1, display: "flex", alignItems: "center", gap: 6 }}>
+                      {label}
+                      {t === "tests" && result && (
+                        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: scoreColor(result.overall_score) }}>{result.overall_score}</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+              <button onClick={() => setBottomOpen((o) => !o)} style={{ background: "transparent", border: "none", cursor: "pointer", color: "var(--text-tertiary)", padding: "0 16px", height: 38, display: "flex", alignItems: "center" }} aria-label={bottomOpen ? "Collapse" : "Expand"}>
+                {bottomOpen ? <ChevronDown size={15} /> : <ChevronUp size={15} />}
+              </button>
+            </div>
+
+            {/* Body */}
+            {bottomOpen && (
+              <div style={{ flex: 1, overflowY: "auto" }}>
+                {bottomTab === "console" && (
+                  running ? (
+                    <div style={{ padding: "16px 18px" }}>
+                      <span className="animate-pulse-slow" style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text-tertiary)" }}>Running...</span>
+                    </div>
+                  ) : !runOutput ? (
+                    <div style={{ padding: "16px 18px" }}>
+                      <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text-tertiary)" }}>
+                        Click <strong style={{ color: "var(--text-secondary)" }}>Run Code</strong> to see output.
+                      </span>
+                    </div>
+                  ) : (
+                    <div style={{ padding: "14px 18px" }}>
+                      {runOutput.stdout && <pre style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--success)", whiteSpace: "pre-wrap", wordBreak: "break-all", marginBottom: runOutput.stderr ? 10 : 0 }}>{runOutput.stdout}</pre>}
+                      {runOutput.stderr && <pre style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--danger)", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{runOutput.stderr}</pre>}
+                      {!runOutput.stdout && !runOutput.stderr && (
+                        <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text-tertiary)" }}>(no output)</span>
+                      )}
+                    </div>
+                  )
+                )}
+
+                {bottomTab === "tests" && (
+                  submitting ? (
+                    <div style={{ padding: "20px 18px" }}>
+                      <span className="animate-pulse-slow" style={{ fontSize: 13, color: "var(--text-secondary)" }}>Evaluating submission...</span>
+                    </div>
+                  ) : !result ? (
+                    <div style={{ padding: "16px 18px" }}>
+                      <span style={{ fontSize: 13, color: "var(--text-tertiary)" }}>
+                        {testCases.length > 0 ? `${testCases.length} test case${testCases.length === 1 ? "" : "s"} · ` : ""}
+                        Click <strong style={{ color: "var(--text-secondary)" }}>Submit</strong> to evaluate.
+                      </span>
+                      {visibleCases.length > 0 && (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 12 }}>
+                          {visibleCases.map((tc: any, i: number) => (
+                            <div key={i} style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "8px 12px", fontSize: 12, background: "var(--bg-tertiary)" }}>
+                              <span style={{ color: "var(--text-tertiary)" }}>Case {i + 1}{tc.description ? `: ${tc.description}` : ""}</span>
+                              <div style={{ fontFamily: "var(--font-mono)", color: "var(--text-secondary)", marginTop: 3, fontSize: 11 }}>
+                                Expected: <span style={{ color: "var(--success)" }}>{tc.expected_output}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div style={{ padding: "16px 18px" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", borderRadius: 10, background: accepted ? "var(--success-bg)" : "var(--danger-bg)", border: `1px solid ${accepted ? "var(--success)" : "var(--danger)"}`, marginBottom: 14 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          {accepted ? <CheckCircle size={18} color="var(--success)" /> : <X size={18} color="var(--danger)" />}
+                          <div>
+                            <div style={{ fontFamily: "var(--font-display)", fontSize: 16, fontWeight: 700, color: accepted ? "var(--success)" : "var(--danger)" }}>
+                              {accepted ? "Accepted" : "Needs Work"}
+                            </div>
+                            <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>
+                              Score: {result.overall_score} · Grade: {result.grade}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {result.overall_feedback && (
+                        <p style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6, marginBottom: 14 }}>{result.overall_feedback}</p>
+                      )}
+
+                      {result.criterion_scores?.length > 0 && (
+                        <div style={{ marginBottom: 14 }}>
+                          <span className="overline" style={{ display: "block", marginBottom: 8 }}>Criteria</span>
+                          {result.criterion_scores.map((cs: any, i: number) => (
+                            <div key={i} style={{ marginBottom: 10 }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                                <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>{cs.criterion}</span>
+                                <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: scoreColor(cs.score) }}>{cs.score}%</span>
+                              </div>
+                              <div style={{ height: 3, background: "var(--bg-tertiary)", borderRadius: 2, overflow: "hidden" }}>
+                                <div style={{ height: "100%", width: `${cs.score}%`, background: scoreColor(cs.score), borderRadius: 2 }} />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {result.strengths?.length > 0 && (
+                        <div style={{ marginBottom: 10, borderLeft: "3px solid var(--success)", background: "var(--success-bg)", padding: "10px 12px", borderRadius: "0 8px 8px 0" }}>
+                          <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, color: "var(--success)", marginBottom: 4 }}>Strengths</div>
+                          {result.strengths.map((s: string, i: number) => (
+                            <p key={i} style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: i === 0 ? 0 : 4, lineHeight: 1.5 }}>· {s}</p>
+                          ))}
+                        </div>
+                      )}
+
+                      {result.improvements?.length > 0 && (
+                        <div style={{ borderLeft: "3px solid var(--warning)", background: "var(--warning-bg)", padding: "10px 12px", borderRadius: "0 8px 8px 0" }}>
+                          <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, color: "var(--warning)", marginBottom: 4 }}>Improvements</div>
+                          {result.improvements.map((s: string, i: number) => (
+                            <p key={i} style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: i === 0 ? 0 : 4, lineHeight: 1.5 }}>· {s}</p>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -638,15 +786,6 @@ function Breadcrumb({ assignment, courseId, classId, dark }: { assignment: Assig
       <Link href={`/student/courses/${courseId}/classes/${classId}`} style={{ color: "var(--text-tertiary)", textDecoration: "none" }}>{assignment.class_title}</Link>
       <span style={{ color: "var(--text-tertiary)" }}>/</span>
       <span style={{ color: "var(--accent)", fontWeight: 600 }}>{assignment.title}</span>
-    </div>
-  );
-}
-
-function HintBox({ items, label, color, bg }: { items: string[]; label: string; color: string; bg: string }) {
-  return (
-    <div style={{ borderLeft: `2px solid ${color}`, background: bg, padding: "8px 12px", borderRadius: "0 6px 6px 0", marginBottom: 8 }}>
-      <span style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", color, fontWeight: 700 }}>{label}</span>
-      {items.map((h, i) => <p key={i} style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>{h}</p>)}
     </div>
   );
 }
