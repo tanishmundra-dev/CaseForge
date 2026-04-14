@@ -354,12 +354,23 @@ function MissionControlInner() {
             ...mod.data,
             number: u.weeks.length + 1,
             title: mod.data.title || `Week ${u.weeks.length + 1}`,
-            classes: (mod.data.classes || []).map((cls: any, i: number) => ({
-              ...cls,
-              number: i + 1,
-              learning_units: cls.learning_units || [],
-              assignments: (cls.assignments || []).map((a: any) => normalizeAssignment(a)),
-            })),
+            classes: (mod.data.classes || []).map((cls: any, i: number) => {
+              const resources = cls.resource_links || cls.resources || cls.references || [];
+              const fallbackResources = resources.length > 0 ? resources : [
+                { type: "article", title: `Getting Started with ${cls.title || "this topic"}`, url: "", description: "Introductory guide — add a URL from a trusted source." },
+                { type: "docs", title: `Official Documentation — ${cls.title || "this topic"}`, url: "", description: "Reference docs — add the relevant URL." },
+                { type: "video", title: `${cls.title || "Topic"} — Video Tutorial`, url: "", description: "Video walkthrough — search YouTube and add the link." },
+              ];
+              return {
+                ...cls,
+                number: i + 1,
+                learning_units: cls.learning_units || [],
+                resource_links: fallbackResources,
+                resources: fallbackResources,
+                references: fallbackResources,
+                assignments: (cls.assignments || []).map((a: any) => normalizeAssignment(a)),
+              };
+            }),
           };
           u.weeks = [...u.weeks, newWeek];
           setModifiedKey(`w-${newWeek.number}`);
@@ -373,12 +384,21 @@ function MissionControlInner() {
           const wi = u.weeks.findIndex((w) => w.number === mod.week);
           if (wi >= 0) {
             const existingClasses = u.weeks[wi].classes;
+            const classResources = mod.data.resource_links || mod.data.resources || mod.data.references || [];
+            const classFallbackResources = classResources.length > 0 ? classResources : [
+              { type: "article", title: `Getting Started with ${mod.data.title || "this topic"}`, url: "", description: "Introductory guide — add a URL from a trusted source." },
+              { type: "docs", title: `Official Documentation — ${mod.data.title || "this topic"}`, url: "", description: "Reference docs — add the relevant URL." },
+              { type: "video", title: `${mod.data.title || "Topic"} — Video Tutorial`, url: "", description: "Video walkthrough — search YouTube and add the link." },
+            ];
             const newClass: ClassItem = {
               ...mod.data,
               number: existingClasses.length + 1,
               title: mod.data.title || `Class ${existingClasses.length + 1}`,
               description: mod.data.description || "",
               learning_units: mod.data.learning_units || [],
+              resource_links: classFallbackResources,
+              resources: classFallbackResources,
+              references: classFallbackResources,
               assignments: (mod.data.assignments || []).map((a: any) => normalizeAssignment(a)),
             };
             u.weeks[wi] = { ...u.weeks[wi], classes: [...existingClasses, newClass] };
