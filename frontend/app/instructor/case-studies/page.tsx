@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { fetchAPI } from "@/lib/api";
-import { ArrowRight, Plus, Upload, Pencil, BookOpen, Clock } from "lucide-react";
+import { ArrowRight, Plus, Upload, Pencil, BookOpen, Clock, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -19,6 +19,7 @@ export default function CourseManagementPage() {
   const [courses, setCourses] = useState<CourseSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [publishing, setPublishing] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
   const router = useRouter();
 
   const loadCourses = () => {
@@ -39,6 +40,18 @@ export default function CourseManagementPage() {
       loadCourses();
     } catch {}
     finally { setPublishing(null); }
+  };
+
+  const handleDelete = async (courseId: string, courseTitle: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!confirm(`Delete "${courseTitle}"? This will permanently remove the course, all its classes, assignments, and submissions. This cannot be undone.`)) return;
+    setDeleting(courseId);
+    try {
+      await fetchAPI(`/instructor/courses/${courseId}`, { method: "DELETE" });
+      loadCourses();
+    } catch {}
+    finally { setDeleting(null); }
   };
 
   const weekCount = (c: CourseSummary) => c.weeks?.length || 0;
@@ -82,7 +95,15 @@ export default function CourseManagementPage() {
         </div>
       </div>
       {/* Actions */}
-      <div style={{ borderTop: "1px solid var(--border)", padding: "10px 16px", display: "flex", gap: 8, justifyContent: "flex-end", background: "var(--bg-secondary)" }}>
+      <div style={{ borderTop: "1px solid var(--border)", padding: "10px 16px", display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center", background: "var(--bg-secondary)" }}>
+        <button
+          className="btn-secondary"
+          onClick={(e) => handleDelete(course.id, course.title, e)}
+          disabled={deleting === course.id}
+          style={{ padding: "5px 10px", fontSize: 11, color: "var(--danger, #dc2626)", borderColor: "var(--danger, #dc2626)", marginRight: "auto" }}
+        >
+          <Trash2 size={12} /> {deleting === course.id ? "Deleting..." : "Delete"}
+        </button>
         {course.status === "draft" && (
           <>
             <button

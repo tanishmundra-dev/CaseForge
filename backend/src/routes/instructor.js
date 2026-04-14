@@ -253,6 +253,37 @@ router.post("/courses/:courseId/publish", async (req, res) => {
   res.json(await buildCourseObject(updated));
 });
 
+router.delete("/courses/:courseId", async (req, res) => {
+  const { courseId } = req.params;
+
+  const { data: course } = await supabase.from("courses").select("id").eq("id", courseId).maybeSingle();
+  if (!course) return res.status(404).json({ error: "Course not found" });
+
+  // Delete in order: assignments → classes → weeks → course
+  const { data: weeks } = await supabase.from("weeks").select("id").eq("course_id", courseId);
+  const weekIds = (weeks || []).map((w) => w.id);
+
+  if (weekIds.length > 0) {
+    const { data: classes } = await supabase.from("classes").select("id").in("week_id", weekIds);
+    const classIds = (classes || []).map((c) => c.id);
+
+    if (classIds.length > 0) {
+      await supabase.from("assignments").delete().in("class_id", classIds);
+      await supabase.from("classes").delete().in("id", classIds);
+    }
+    await supabase.from("weeks").delete().in("id", weekIds);
+  }
+
+  // Delete enrollments and submissions tied to this course
+  await supabase.from("submissions").delete().eq("course_id", courseId);
+  await supabase.from("enrollments").delete().eq("course_id", courseId);
+
+  const { error } = await supabase.from("courses").delete().eq("id", courseId);
+  if (error) return res.status(500).json({ error: error.message });
+
+  res.json({ success: true });
+});
+
 // ── Assignment CRUD ──
 
 router.get("/classes/:classId", async (req, res) => {
