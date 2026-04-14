@@ -525,10 +525,10 @@ export default function CourseDetailPage() {
                         <pre style={{ marginTop: 6, padding: "14px 16px", background: "#1a1a18", color: "#e8e4df", borderRadius: 8, fontSize: 13, fontFamily: "var(--font-mono)", overflowX: "auto", lineHeight: 1.6 }}>{asn.starter_code}</pre>
                       </div>
                     )}
-                    {asn.test_cases?.length > 0 && (
+                    {(asn.test_cases?.length ?? 0) > 0 && (
                       <div style={{ marginBottom: 14 }}>
                         <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-tertiary)", textTransform: "uppercase" }}>Test Cases</span>
-                        {asn.test_cases.map((tc: any, ti: number) => (
+                        {asn.test_cases!.map((tc: any, ti: number) => (
                           <div key={ti} style={{ marginTop: 4, padding: "8px 12px", background: "var(--bg-tertiary)", borderRadius: 4, fontSize: 12, fontFamily: "var(--font-mono)" }}>
                             <span style={{ color: "var(--text-tertiary)" }}>Input:</span> {tc.input || "—"} &rarr; <span style={{ color: "var(--success)" }}>{tc.expected_output}</span>
                             {tc.description && <span style={{ color: "var(--text-tertiary)", marginLeft: 8 }}>({tc.description})</span>}
@@ -548,10 +548,10 @@ export default function CourseDetailPage() {
                 ))}
 
                 {/* Quiz: questions */}
-                {asn.type === "objective" && asn.questions?.length > 0 && (
+                {asn.type === "objective" && (asn.questions?.length ?? 0) > 0 && (
                   <div>
-                    <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-tertiary)", textTransform: "uppercase", display: "block", marginBottom: 8 }}>{asn.questions.length} Questions</span>
-                    {asn.questions.map((q: any, qi: number) => (
+                    <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-tertiary)", textTransform: "uppercase", display: "block", marginBottom: 8 }}>{asn.questions!.length} Questions</span>
+                    {asn.questions!.map((q: any, qi: number) => (
                       <div key={qi} style={{ marginBottom: 12, padding: "12px 16px", background: "var(--bg-tertiary)", borderRadius: 6 }}>
                         <p style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Q{qi + 1}. {q.question}</p>
                         {q.type === "mcq" && q.options?.map((opt: string, oi: number) => (
@@ -572,11 +572,11 @@ export default function CourseDetailPage() {
                 )}
 
                 {/* Rubric */}
-                {asn.rubric?.length > 0 && (
+                {(asn.rubric?.length ?? 0) > 0 && (
                   <div style={{ marginTop: 14 }}>
                     <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-tertiary)", textTransform: "uppercase" }}>Rubric</span>
                     <div style={{ display: "grid", gap: 6, marginTop: 6 }}>
-                      {asn.rubric.map((r: any, ri: number) => (
+                      {asn.rubric!.map((r: any, ri: number) => (
                         <div key={ri} style={{ padding: "8px 12px", background: "var(--bg-tertiary)", borderRadius: 4, fontSize: 12 }}>
                           <strong>{r.criterion}</strong> <span style={{ color: "var(--text-tertiary)" }}>({r.weight}%)</span>
                         </div>
@@ -586,8 +586,8 @@ export default function CourseDetailPage() {
                 )}
 
                 {/* Hints */}
-                {asn.hints?.length > 0 && (
-                  <p style={{ fontSize: 12, color: "var(--text-tertiary)", marginTop: 10 }}><strong>Hints:</strong> {asn.hints.join(" • ")}</p>
+                {(asn.hints?.length ?? 0) > 0 && (
+                  <p style={{ fontSize: 12, color: "var(--text-tertiary)", marginTop: 10 }}><strong>Hints:</strong> {asn.hints!.join(" • ")}</p>
                 )}
                 {asn.aha_moment && (
                   <p style={{ fontSize: 12, color: "var(--accent)", marginTop: 6 }}><strong>Key Insight:</strong> {asn.aha_moment}</p>

@@ -277,7 +277,7 @@ export default function StudentAnalyticsDetailPage() {
                     <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: "var(--text-tertiary)" }} />
                     <Tooltip
                       contentStyle={{ background: "var(--bg-secondary)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12 }}
-                      formatter={(value: number, name: string) => [
+                      formatter={(value: unknown, name: unknown) => [
                         `${value}%`,
                         name === "score" ? "Score" : "Running Avg",
                       ]}
