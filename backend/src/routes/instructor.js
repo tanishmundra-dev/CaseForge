@@ -57,9 +57,9 @@ async function buildCourseObject(course) {
 
   const classMap = {};
   for (const cls of classes) {
-    classMap[cls.id] = { ...cls, assignments: [], references: cls.resource_links || [] };
+    const links = cls.resource_links || [];
+    classMap[cls.id] = { ...cls, assignments: [], references: links, resource_links: links, resources: links };
     delete classMap[cls.id].week_id;
-    delete classMap[cls.id].resource_links;
   }
   for (const asn of assignments) {
     const cid = asn.class_id;

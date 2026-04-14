@@ -31,7 +31,7 @@ interface Message { role: "user" | "assistant" | "system"; content: string; }
 interface Assignment { title: string; description: string; type: string; difficulty: string; starter_code?: string; hints?: string[]; pitfalls?: string[]; aha_moment?: string; questions?: any[]; files?: any[]; test_cases?: any[]; rubric?: any[]; [k: string]: any; }
 interface LearningUnit { type: string; title: string; duration?: number; content?: string; completion_type?: string; questions?: unknown[]; video_search_query?: string; video_channel?: string; }
 interface ResourceLink { title: string; url?: string; description?: string; type?: string; source?: string; video_search_query?: string; channel?: string; }
-interface ClassItem { number: number; title: string; description: string; theory_content?: string; assignments: Assignment[]; references?: { title: string; url: string; description: string }[]; learning_units?: LearningUnit[]; resource_links?: ResourceLink[]; resources?: ResourceLink[]; }
+interface ClassItem { number: number; title: string; description: string; theory_content?: string; assignments: Assignment[]; references?: ResourceLink[]; learning_units?: LearningUnit[]; resource_links?: ResourceLink[]; resources?: ResourceLink[]; }
 interface Week { number: number; title: string; classes: ClassItem[]; }
 interface CourseState { id?: string; title: string; description: string; difficulty: string; weeks: Week[]; status?: string; }
 
@@ -292,7 +292,7 @@ function MissionControlInner() {
                   : existing.theory_content,
                 learning_units: keepIfEmpty(mod.data.learning_units, existing.learning_units || []),
                 assignments: keepIfEmpty(mod.data.assignments, existing.assignments || []),
-                resource_links: keepIfEmpty(mod.data.resource_links, existing.resource_links || []),
+                resource_links: keepIfEmpty(mod.data.resource_links || mod.data.references, existing.resource_links || existing.references || []),
               };
               setModifiedKey(`c-${mod.week}-${cn}`);
               setExpandedWeeks((p) => new Set([...p, mod.week]));
@@ -490,7 +490,7 @@ function MissionControlInner() {
                       num = weeks[wi].classes.length + 1;
                       while (existingNumbers.has(num)) num++;
                     }
-                    const newClass: ClassItem = { number: num, title: d.title, description: d.description, assignments: [], references: [] };
+                    const newClass: ClassItem = { number: num, title: d.title, description: d.description, assignments: [], references: [], resource_links: [], resources: [] };
                     weeks = weeks.map((w, i) => i === wi ? { ...w, classes: [...w.classes, newClass] } : w);
                     setCourse((p) => p ? { ...p, weeks: weeks.map((w) => ({ ...w, classes: [...w.classes] })) } : null);
                     setExpandedClasses((p) => new Set([...p, `${d.week}-${num}`]));
@@ -691,7 +691,7 @@ function MissionControlInner() {
 
   const patchResource = (weekNum: number, classNum: number, idx: number, patch: Partial<ResourceLink>) => {
     mutateClass(weekNum, classNum, (c) => {
-      const list = [...(c.resource_links || c.resources || [])];
+      const list = [...(c.resource_links || c.resources || c.references || [])];
       if (list[idx]) list[idx] = { ...list[idx], ...patch };
       return { ...c, resource_links: list };
     });
@@ -700,7 +700,7 @@ function MissionControlInner() {
   const addResource = (weekNum: number, classNum: number) => {
     mutateClass(weekNum, classNum, (c) => ({
       ...c,
-      resource_links: [...(c.resource_links || c.resources || []), { type: "article", title: "New Resource", url: "" }],
+      resource_links: [...(c.resource_links || c.resources || c.references || []), { type: "article", title: "New Resource", url: "" }],
     }));
   };
 
@@ -708,7 +708,7 @@ function MissionControlInner() {
     if (!confirm("Delete this resource?")) return;
     mutateClass(weekNum, classNum, (c) => ({
       ...c,
-      resource_links: (c.resource_links || c.resources || []).filter((_, i) => i !== idx),
+      resource_links: (c.resource_links || c.resources || c.references || []).filter((_, i) => i !== idx),
     }));
   };
 
@@ -1172,7 +1172,7 @@ function MissionControlInner() {
 
                                 {/* Resources (editable) */}
                                 {(() => {
-                                  const resources = cls.resource_links || cls.resources || [];
+                                  const resources = cls.resource_links || cls.resources || cls.references || [];
                                   return (
                                     <div style={{ marginTop: 10, padding: "10px 14px", background: "var(--accent-subtle)", borderRadius: 8 }}>
                                       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
